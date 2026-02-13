@@ -13,6 +13,7 @@ import {
   utcIsoToBogotaParts,
 } from "@/src/domain/match";
 import type { MatchView } from "@/src/domain/types";
+import { AVATAR_MAX_BYTES, getAvatarInitials, validateAvatarFile } from "@/src/lib/avatar";
 import { normalizePublicId } from "@/src/lib/public-id";
 
 describe("domain/match", () => {
@@ -72,6 +73,7 @@ describe("domain/match", () => {
   it("builds whatsapp summary with emoji and key fields", () => {
     const match: MatchView = {
       publicId: "abc123",
+      organizerUserId: "u1",
       club: "Padel House",
       startsAtUtc: "2026-02-13T01:30:00.000Z",
       timezone: "America/Bogota",
@@ -79,7 +81,7 @@ describe("domain/match", () => {
       modality: "mixto",
       status: "abierta",
       participants: [
-        { userId: "u1", alias: "Ana", joinedAt: "2026-01-01T00:00:00.000Z" },
+        { userId: "u1", alias: "Ana", joinedAt: "2026-01-01T00:00:00.000Z", avatarUrl: null },
       ],
       isOrganizer: true,
       canJoin: false,
@@ -108,5 +110,23 @@ describe("domain/match", () => {
     expect(normalizePublicId("b85ebd93df")).toBe("b85ebd93df");
     expect(normalizePublicId("b85ebd93df Súmate al partido")).toBe("b85ebd93df");
     expect(normalizePublicId("b85ebd93df%20S%C3%BAmate%20al%20partido")).toBe("b85ebd93df");
+  });
+
+  it("computes avatar initials for single and multiple words", () => {
+    expect(getAvatarInitials("Nataly")).toBe("N");
+    expect(getAvatarInitials("Daniel Gonzalez")).toBe("DG");
+    expect(getAvatarInitials("Juan David Pérez")).toBe("JP");
+    expect(getAvatarInitials("  maria   jose  ")).toBe("MJ");
+  });
+
+  it("validates avatar file type and size", () => {
+    const valid = new File([new Uint8Array(1024)], "avatar.jpg", { type: "image/jpeg" });
+    expect(validateAvatarFile(valid)).toBeNull();
+
+    const invalidType = new File([new Uint8Array(1024)], "avatar.gif", { type: "image/gif" });
+    expect(validateAvatarFile(invalidType)).toBe("Formato inválido. Usa JPG, PNG o WEBP.");
+
+    const tooBig = new File([new Uint8Array(AVATAR_MAX_BYTES + 1)], "avatar.png", { type: "image/png" });
+    expect(validateAvatarFile(tooBig)).toBe("La foto debe pesar máximo 3MB.");
   });
 });

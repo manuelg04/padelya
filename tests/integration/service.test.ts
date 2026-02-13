@@ -35,6 +35,8 @@ describe("PadelService integration", () => {
     });
 
     expect(match.participants).toHaveLength(1);
+    expect(match.organizerUserId).toBeDefined();
+    expect(match.participants[0]?.avatarUrl).toBeNull();
     expect(match.status).toBe("abierta");
     expect(match.isOrganizer).toBe(true);
   });

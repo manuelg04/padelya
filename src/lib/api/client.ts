@@ -219,3 +219,59 @@ export async function listNotifications(token: string, limit = 50): Promise<Noti
   const payload = await parseJson<{ notifications: NotificationRecord[] }>(response);
   return payload.notifications;
 }
+
+export async function generateAvatarUploadUrl(token: string): Promise<string> {
+  const response = await fetch("/api/me/avatar/upload-url", {
+    method: "POST",
+    headers: {
+      ...authHeaders(token),
+    },
+  });
+  const payload = await parseJson<{ uploadUrl: string }>(response);
+  return payload.uploadUrl;
+}
+
+export async function uploadAvatarFile(uploadUrl: string, file: File): Promise<string> {
+  const response = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": file.type,
+    },
+    body: file,
+  });
+
+  if (!response.ok) {
+    throw new ApiError("REQUEST_ERROR", "No se pudo subir la imagen.");
+  }
+
+  const payload = (await response.json()) as { storageId?: string };
+  if (typeof payload.storageId !== "string" || payload.storageId.length === 0) {
+    throw new ApiError("REQUEST_ERROR", "Respuesta inválida de upload.");
+  }
+
+  return payload.storageId;
+}
+
+export async function setAvatar(token: string, storageId: string): Promise<UserRecord> {
+  const response = await fetch("/api/me/avatar", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(token),
+    },
+    body: JSON.stringify({ storageId }),
+  });
+  const payload = await parseJson<{ user: UserRecord }>(response);
+  return payload.user;
+}
+
+export async function removeAvatar(token: string): Promise<UserRecord> {
+  const response = await fetch("/api/me/avatar", {
+    method: "DELETE",
+    headers: {
+      ...authHeaders(token),
+    },
+  });
+  const payload = await parseJson<{ user: UserRecord }>(response);
+  return payload.user;
+}

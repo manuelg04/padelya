@@ -23,8 +23,9 @@ import {
 import { useAuth } from "@/src/components/auth/auth-provider";
 import { StatusBadge } from "@/src/components/features/status-badge";
 import { AppShell } from "@/src/components/layout/app-shell";
+import { Avatar, AvatarFallback, AvatarImage } from "@/src/components/ui/avatar";
 import { Button } from "@/src/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/src/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/src/components/ui/card";
 import { Progress } from "@/src/components/ui/progress";
 import { Separator } from "@/src/components/ui/separator";
 import { Skeleton } from "@/src/components/ui/skeleton";
@@ -41,8 +42,9 @@ import {
   unfollowMatchWatch,
   type ApiError,
 } from "@/src/lib/api/client";
+import { getAvatarInitials } from "@/src/lib/avatar";
 import { normalizePublicId } from "@/src/lib/public-id";
-import { toErrorMessage } from "@/src/lib/utils";
+import { cn, toErrorMessage } from "@/src/lib/utils";
 
 function isAliasRequired(error: unknown): boolean {
   if (!error || typeof error !== "object") {
@@ -316,18 +318,48 @@ export default function MatchDetailPage() {
               <Progress value={match.participants.length} max={MAX_PLAYERS} />
 
               <div className="space-y-2">
-                {match.participants.map((participant, index) => (
-                  <div
-                    key={participant.userId}
-                    className="flex items-center gap-3 rounded-xl bg-emerald-50/60 px-3.5 py-2.5 ring-1 ring-inset ring-emerald-100"
-                  >
-                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-600 text-xs font-bold text-white">
-                      {index + 1}
+                {match.participants.map((participant, index) => {
+                  const isCurrentUser = participant.userId === user?.id;
+                  const isOrganizer = participant.userId === match.organizerUserId;
+
+                  return (
+                    <div
+                      key={participant.userId}
+                      className={cn(
+                        "flex items-center gap-3 rounded-xl bg-emerald-50/60 px-3.5 py-2.5 ring-1 ring-inset ring-emerald-100",
+                        isCurrentUser && "ring-emerald-300",
+                      )}
+                    >
+                      <div className="relative">
+                        <Avatar size="default" className="ring-1 ring-emerald-200">
+                          <AvatarImage src={participant.avatarUrl ?? undefined} alt={participant.alias} />
+                          <AvatarFallback>{getAvatarInitials(participant.alias)}</AvatarFallback>
+                        </Avatar>
+                        <span className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-600 text-[10px] font-bold text-white ring-2 ring-white">
+                          {index + 1}
+                        </span>
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-sm font-medium text-zinc-800">{participant.alias}</span>
+                          {isCurrentUser ? (
+                            <span className="rounded-full border border-emerald-200 bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                              Tú
+                            </span>
+                          ) : null}
+                          {isOrganizer ? (
+                            <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                              Organizador
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      <CheckCircle2 className="ml-auto h-4 w-4 text-emerald-500" />
                     </div>
-                    <span className="text-sm font-medium text-zinc-800">{participant.alias}</span>
-                    <CheckCircle2 className="ml-auto h-4 w-4 text-emerald-500" />
-                  </div>
-                ))}
+                  );
+                })}
 
                 {Array.from({ length: emptySlots }).map((_, i) => (
                   <div

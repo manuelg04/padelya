@@ -1,5 +1,5 @@
 import { nowIso } from "./date_time";
-import type { ActorInput, ReadCtx, UserDoc, WriteCtx } from "./types";
+import type { ActorInput, AuthIdentity, ReadCtx, UserDoc, WriteCtx } from "./types";
 
 export async function findUserByFirebaseUid(ctx: ReadCtx, firebaseUid: string): Promise<UserDoc | null> {
   return ctx.db
@@ -44,11 +44,24 @@ export async function ensureUser(ctx: WriteCtx, actor: ActorInput): Promise<User
   return user;
 }
 
-export async function getAuthenticatedUser(ctx: ReadCtx): Promise<UserDoc> {
+export async function getRequiredIdentity(ctx: ReadCtx): Promise<AuthIdentity> {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity?.subject) {
     throw new Error("UNAUTHORIZED");
   }
+
+  return identity;
+}
+
+export async function ensureUserFromIdentity(ctx: WriteCtx, identity: AuthIdentity): Promise<UserDoc> {
+  return ensureUser(ctx, {
+    firebaseUid: identity.subject,
+    phoneE164: identity.phoneNumber ?? "",
+  });
+}
+
+export async function getAuthenticatedUser(ctx: ReadCtx): Promise<UserDoc> {
+  const identity = await getRequiredIdentity(ctx);
 
   const user = await findUserByFirebaseUid(ctx, identity.subject);
   if (!user) {

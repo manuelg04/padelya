@@ -1,5 +1,6 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import type { UserIdentity } from "convex/server";
 
 export type ReadCtx = QueryCtx | MutationCtx;
 export type WriteCtx = MutationCtx;
@@ -18,6 +19,8 @@ export type NotificationDoc = Doc<"notifications">;
 export type UserId = Id<"users">;
 export type MatchId = Id<"matches">;
 export type NotificationId = Id<"notifications">;
+export type StorageId = Id<"_storage">;
+export type AuthIdentity = UserIdentity;
 
 export type Modality = MatchDoc["modality"];
 export type OpenWindow = "today" | "next7";
@@ -33,6 +36,7 @@ export interface UserResponse {
   firebaseUid: string;
   phoneE164: string;
   alias: string | null;
+  avatarUrl: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -41,10 +45,12 @@ export interface MatchViewParticipant {
   userId: string;
   alias: string;
   joinedAt: string;
+  avatarUrl: string | null;
 }
 
 export interface MatchView {
   publicId: string;
+  organizerUserId: string;
   club: string;
   startsAtUtc: string;
   timezone: string;
@@ -72,6 +78,10 @@ export interface ActorArgs {
 
 export interface UpdateAliasArgs extends ActorArgs {
   alias: string;
+}
+
+export interface SetMyAvatarArgs {
+  storageId: StorageId;
 }
 
 export interface CreateMatchArgs extends ActorArgs {

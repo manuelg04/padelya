@@ -160,6 +160,7 @@ export class PadelService {
         firebaseUid: `mock:${phoneE164}`,
         phoneE164,
         alias: null,
+        avatarUrl: null,
         createdAt,
         updatedAt: createdAt,
       });
@@ -204,6 +205,22 @@ export class PadelService {
     };
     this.users.set(user.id, next);
     return next;
+  }
+
+  async generateAvatarUploadUrl(token: string): Promise<string> {
+    void token;
+    throw new DomainError("VALIDATION_ERROR", "Foto disponible con backend Convex.");
+  }
+
+  async setAvatar(token: string, storageId: string): Promise<UserRecord> {
+    void token;
+    void storageId;
+    throw new DomainError("VALIDATION_ERROR", "Foto disponible con backend Convex.");
+  }
+
+  async removeAvatar(token: string): Promise<UserRecord> {
+    void token;
+    throw new DomainError("VALIDATION_ERROR", "Foto disponible con backend Convex.");
   }
 
   createMatch(token: string, input: CreateMatchInput): MatchView {
@@ -643,6 +660,7 @@ export class PadelService {
       firebaseUid,
       phoneE164,
       alias: null,
+      avatarUrl: null,
       createdAt: now,
       updatedAt: now,
     });
@@ -689,6 +707,7 @@ export class PadelService {
           userId: participant.userId,
           alias: user.alias ?? "Sin alias",
           joinedAt: participant.joinedAt,
+          avatarUrl: user.avatarUrl,
         } satisfies MatchViewParticipant;
       })
       .sort((a, b) => a.joinedAt.localeCompare(b.joinedAt));
@@ -713,6 +732,7 @@ export class PadelService {
 
     return {
       publicId: match.publicId,
+      organizerUserId: match.organizerUserId,
       club: match.club,
       startsAtUtc: match.startsAtUtc,
       timezone: match.timezone,

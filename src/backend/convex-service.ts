@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { ConvexHttpClient } from "convex/browser";
 
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import { DomainError, type DomainErrorCode } from "@/src/domain/errors";
 import { buildWhatsAppSummary } from "@/src/domain/match";
 import type {
@@ -75,6 +76,7 @@ function parseFirebaseActorToken(token: string): { firebaseUid: string; phoneE16
 }
 
 export class ConvexPadelService {
+  private readonly convexUrl: string;
   private readonly client: ConvexHttpClient;
   private readonly events = new EventEmitter();
 
@@ -83,6 +85,7 @@ export class ConvexPadelService {
     if (!convexUrl) {
       throw new Error("Falta NEXT_PUBLIC_CONVEX_URL para usar persistencia Convex.");
     }
+    this.convexUrl = convexUrl;
     this.client = new ConvexHttpClient(convexUrl);
   }
 
@@ -121,6 +124,36 @@ export class ConvexPadelService {
     const actor = parseFirebaseActorToken(token);
     try {
       return await this.client.mutation(api.padel.updateAlias, { actor, alias });
+    } catch (error) {
+      return normalizeError(error);
+    }
+  }
+
+  private createAuthedClient(idToken: string): ConvexHttpClient {
+    return new ConvexHttpClient(this.convexUrl, { auth: idToken });
+  }
+
+  async generateAvatarUploadUrl(idToken: string): Promise<string> {
+    try {
+      return await this.createAuthedClient(idToken).mutation(api.padel.generateAvatarUploadUrl, {});
+    } catch (error) {
+      return normalizeError(error);
+    }
+  }
+
+  async setAvatar(idToken: string, storageId: string): Promise<UserRecord> {
+    try {
+      return await this.createAuthedClient(idToken).mutation(api.padel.setMyAvatar, {
+        storageId: storageId as Id<"_storage">,
+      });
+    } catch (error) {
+      return normalizeError(error);
+    }
+  }
+
+  async removeAvatar(idToken: string): Promise<UserRecord> {
+    try {
+      return await this.createAuthedClient(idToken).mutation(api.padel.removeMyAvatar, {});
     } catch (error) {
       return normalizeError(error);
     }

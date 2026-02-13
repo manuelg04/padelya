@@ -4,3 +4,6 @@ export const PRESENCE_NOTIFICATION_COOLDOWN_MS = 5 * 60 * 1000;
 export const DEFAULT_TIMEZONE = "America/Bogota";
 export const DEFAULT_NOTIFICATION_LIMIT = 30;
 export const MAX_NOTIFICATION_LIMIT = 100;
+export const AVATAR_MAX_BYTES = 3 * 1024 * 1024;
+export const AVATAR_ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+export const AVATAR_MIME_TYPES = new Set<string>(AVATAR_ALLOWED_MIME_TYPES);

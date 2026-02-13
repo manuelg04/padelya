@@ -5,19 +5,19 @@ import { Bell, LogOut } from "lucide-react";
 
 import { useAuth } from "@/src/components/auth/auth-provider";
 import { NotificationBell } from "@/src/components/notifications/notification-bell";
+import { Avatar, AvatarFallback, AvatarImage } from "@/src/components/ui/avatar";
 import { Button } from "@/src/components/ui/button";
+import { getAvatarInitials } from "@/src/lib/avatar";
 import { ENABLE_CONVEX_REALTIME } from "@/src/lib/env";
 
-function UserAvatar({ alias }: { alias: string | null }) {
-  const initial = alias ? alias.charAt(0).toUpperCase() : "?";
+function UserAvatar({ alias, avatarUrl }: { alias: string | null; avatarUrl: string | null }) {
+  const initials = getAvatarInitials(alias);
 
   return (
-    <div
-      className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-xs font-semibold text-emerald-700"
-      aria-hidden="true"
-    >
-      {initial}
-    </div>
+    <Avatar size="sm" className="ring-1 ring-emerald-200/80">
+      <AvatarImage src={avatarUrl ?? undefined} alt={alias ?? "Jugador"} />
+      <AvatarFallback>{initials}</AvatarFallback>
+    </Avatar>
   );
 }
 
@@ -43,7 +43,7 @@ export function AppHeader() {
                 </Button>
               )}
               <Link href="/perfil" className="flex items-center gap-2 rounded-full transition-opacity hover:opacity-80">
-                <UserAvatar alias={user.alias} />
+                <UserAvatar alias={user.alias} avatarUrl={user.avatarUrl} />
                 <span className="max-w-[100px] truncate text-sm font-medium text-zinc-700">
                   {user.alias ?? "Sin alias"}
                 </span>

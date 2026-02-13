@@ -20,7 +20,13 @@ import {
   markNotificationReadHandler,
   unreadNotificationsCountHandler,
 } from "./padel/handlers_notifications";
-import { updateAliasHandler, upsertUserHandler } from "./padel/handlers_users";
+import {
+  generateAvatarUploadUrlHandler,
+  removeMyAvatarHandler,
+  setMyAvatarHandler,
+  updateAliasHandler,
+  upsertUserHandler,
+} from "./padel/handlers_users";
 import { actorValidator, createMatchInputValidator, modalityValidator, openWindowValidator } from "./padel/validators";
 
 export const upsertUser = mutation({
@@ -36,6 +42,23 @@ export const updateAlias = mutation({
     alias: v.string(),
   },
   handler: (ctx, args) => updateAliasHandler(ctx, args),
+});
+
+export const generateAvatarUploadUrl = mutation({
+  args: {},
+  handler: (ctx) => generateAvatarUploadUrlHandler(ctx),
+});
+
+export const setMyAvatar = mutation({
+  args: {
+    storageId: v.id("_storage"),
+  },
+  handler: (ctx, args) => setMyAvatarHandler(ctx, args),
+});
+
+export const removeMyAvatar = mutation({
+  args: {},
+  handler: (ctx) => removeMyAvatarHandler(ctx),
 });
 
 export const createMatch = mutation({

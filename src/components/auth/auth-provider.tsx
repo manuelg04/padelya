@@ -20,7 +20,17 @@ import {
 } from "firebase/auth";
 
 import type { UserRecord } from "@/src/domain/types";
-import { getMe, requestOtp, updateAlias, verifyOtp, type ApiError } from "@/src/lib/api/client";
+import {
+  generateAvatarUploadUrl,
+  getMe,
+  removeAvatar as removeAvatarRequest,
+  requestOtp,
+  setAvatar,
+  updateAlias,
+  uploadAvatarFile,
+  verifyOtp,
+  type ApiError,
+} from "@/src/lib/api/client";
 import { USE_MOCK_BACKEND } from "@/src/lib/env";
 import { firebaseAuth, isFirebaseClientConfigured } from "@/src/lib/firebase/client";
 
@@ -37,6 +47,8 @@ type AuthContextValue = {
   verifyOtpCode: (phone: string, code: string) => Promise<UserRecord>;
   refreshUser: () => Promise<void>;
   saveAlias: (alias: string) => Promise<UserRecord>;
+  uploadAvatar: (file: File) => Promise<UserRecord>;
+  removeAvatar: () => Promise<UserRecord>;
   logout: () => void;
 };
 
@@ -311,6 +323,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [token],
   );
 
+  const uploadAvatar = useCallback(
+    async (file: File) => {
+      if (USE_MOCK_BACKEND) {
+        throw new Error("Foto disponible con backend Convex.");
+      }
+
+      const activeToken = await getFirebaseAuthOrThrow().currentUser?.getIdToken();
+      if (!activeToken) {
+        throw new Error("Debes iniciar sesión");
+      }
+
+      const uploadUrl = await generateAvatarUploadUrl(activeToken);
+      const storageId = await uploadAvatarFile(uploadUrl, file);
+      const next = await setAvatar(activeToken, storageId);
+      setUser(next);
+      return next;
+    },
+    [],
+  );
+
+  const removeAvatar = useCallback(async () => {
+    if (USE_MOCK_BACKEND) {
+      throw new Error("Foto disponible con backend Convex.");
+    }
+
+    const activeToken = await getFirebaseAuthOrThrow().currentUser?.getIdToken();
+    if (!activeToken) {
+      throw new Error("Debes iniciar sesión");
+    }
+
+    const next = await removeAvatarRequest(activeToken);
+    setUser(next);
+    return next;
+  }, []);
+
   const logout = useCallback(() => {
     if (USE_MOCK_BACKEND) {
       localStorage.removeItem(STORAGE_KEY);
@@ -338,9 +385,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       verifyOtpCode,
       refreshUser,
       saveAlias,
+      uploadAvatar,
+      removeAvatar,
       logout,
     }),
-    [loading, user, token, prepareRecaptcha, sendOtp, verifyOtpCode, refreshUser, saveAlias, logout],
+    [
+      loading,
+      user,
+      token,
+      prepareRecaptcha,
+      sendOtp,
+      verifyOtpCode,
+      refreshUser,
+      saveAlias,
+      uploadAvatar,
+      removeAvatar,
+      logout,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

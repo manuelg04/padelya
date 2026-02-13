@@ -6,6 +6,7 @@ export default defineSchema({
     firebaseUid: v.string(),
     phoneE164: v.string(),
     alias: v.optional(v.string()),
+    avatarStorageId: v.optional(v.id("_storage")),
     createdAt: v.string(),
     updatedAt: v.string(),
   })

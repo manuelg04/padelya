@@ -26,6 +26,7 @@ export async function buildMatchView(ctx: ReadCtx, match: MatchDoc, actorUserId:
         userId: String(participant.userId),
         alias: user.alias ?? "Sin alias",
         joinedAt: participant.joinedAt,
+        avatarUrl: user.avatarStorageId ? await ctx.storage.getUrl(user.avatarStorageId) : null,
       };
     }),
   );
@@ -50,6 +51,7 @@ export async function buildMatchView(ctx: ReadCtx, match: MatchDoc, actorUserId:
 
   return {
     publicId: match.publicId,
+    organizerUserId: String(match.organizerUserId),
     club: match.club,
     startsAtUtc: match.startsAtUtc,
     timezone: match.timezone,

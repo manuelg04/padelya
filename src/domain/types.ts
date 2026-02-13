@@ -9,6 +9,7 @@ export interface UserRecord {
   firebaseUid: string;
   phoneE164: string;
   alias: string | null;
+  avatarUrl: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -37,10 +38,12 @@ export interface MatchViewParticipant {
   userId: string;
   alias: string;
   joinedAt: string;
+  avatarUrl: string | null;
 }
 
 export interface MatchView {
   publicId: string;
+  organizerUserId: string;
   club: string;
   startsAtUtc: string;
   timezone: string;
