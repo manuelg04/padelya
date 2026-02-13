@@ -1,36 +1,150 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Padel por Link (MVP P0 local-first)
 
-## Getting Started
+App web mobile-first para organizar partidos de padel por link (WhatsApp-first).
 
-First, run the development server:
+## Stack
+
+- Frontend: Next.js App Router + Tailwind + componentes estilo shadcn/ui
+- Backend: API routes de Next + Convex (modo real) con fallback mock para tests
+- Realtime: Convex subscriptions para notificaciones + SSE en detalle de partido
+- Auth: Firebase Phone Auth (real) y OTP emulado para tests
+- Tests: Vitest (unit/integration) + Playwright (E2E)
+- PWA minima: manifest + icons + meta tags + standalone
+- Stack objetivo ya conectado en local: Convex + Firebase
+
+## Requisitos
+
+- Node.js 20+
+- pnpm 10+
+
+## Configuracion local
+
+1. Instalar dependencias:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+2. Crear variables de entorno:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+cp .env.example .env.local
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+3. Iniciar en modo local MVP (mock backend + auth emulada):
 
-## Learn More
+```bash
+pnpm dev:test
+```
 
-To learn more about Next.js, take a look at the following resources:
+Abrir [http://127.0.0.1:3000](http://127.0.0.1:3000).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+4. Para modo real local (Firebase + Convex), usar:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+pnpm dev
+```
 
-## Deploy on Vercel
+Con `.env.local`:
+- `NEXT_PUBLIC_USE_MOCK_BACKEND=false`
+- `NEXT_PUBLIC_USE_AUTH_EMULATOR=false`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Scripts
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Desarrollo normal: `pnpm dev`
+- Desarrollo local MVP (recomendado para pruebas): `pnpm dev:test`
+- Unit + integration: `pnpm test`
+- Solo unit: `pnpm test:unit`
+- Solo integration: `pnpm test:integration`
+- E2E: `pnpm test:e2e`
+- Build: `pnpm build`
+- Lint: `pnpm lint`
+
+## Cobertura funcional P0 implementada
+
+- Inicio con tabs `Inicio` / `Mis partidos`
+- Login OTP (flujo emulado local)
+- Perfil (alias obligatorio)
+- Crear partido
+- Link publico de detalle
+- Join/leave con cupos maximo 4 y control de concurrencia (integration test)
+- Cancelar partido por organizador
+- Estado automatico `abierta` / `cerrada` / `cancelada`
+- Copiar resumen para WhatsApp (con emoji)
+- Compartir link (Web Share API con fallback)
+- Realtime en detalle via SSE
+- Notificaciones in-app realtime (`/notificaciones`)
+  - Tu cupo confirmado
+  - Partido lleno (4/4)
+  - Se liberó cupo
+  - Partido cancelado
+
+## Pruebas incluidas
+
+### Unit (Vitest)
+
+- Validacion de alias
+- Derivacion de estado
+- Conversion `datetime-local` (America/Bogota) a UTC y vuelta
+- Formato del resumen de WhatsApp
+
+### Integration (Vitest)
+
+- Crear partido con auto-join del organizador
+- Join/leave y reapertura automatica
+- Bloqueo de join en cancelado
+- Concurrencia ultimo cupo (solo entra un jugador)
+
+### E2E (Playwright)
+
+- Crear partido
+- Abrir link sin login
+- Join/leave con auth emulada
+- Cancelado visible y acciones bloqueadas
+- Copiar resumen
+
+## Variables de entorno
+
+### Necesarias para el flujo local MVP
+
+- `NEXT_PUBLIC_APP_TIMEZONE=America/Bogota`
+- `NEXT_PUBLIC_DEFAULT_PHONE_COUNTRY=CO`
+- `NEXT_PUBLIC_USE_MOCK_BACKEND=true`
+- `NEXT_PUBLIC_USE_AUTH_EMULATOR=true`
+
+### Preparadas para Convex + Firebase (path futuro)
+
+- `NEXT_PUBLIC_CONVEX_URL`
+- `CONVEX_DEPLOYMENT`
+- `NEXT_PUBLIC_FIREBASE_API_KEY`
+- `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`
+- `NEXT_PUBLIC_FIREBASE_PROJECT_ID`
+- `NEXT_PUBLIC_FIREBASE_APP_ID`
+- `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`
+- `FIREBASE_PROJECT_ID`
+- `FIREBASE_AUTH_EMULATOR_HOST`
+
+### Para notificaciones realtime en modo real
+
+- `NEXT_PUBLIC_USE_MOCK_BACKEND=false`
+- `NEXT_PUBLIC_CONVEX_URL` configurada
+- Firebase Phone Auth funcionando para obtener ID token real
+
+## Estructura principal
+
+- `app/`: rutas UI y API
+- `src/domain/`: reglas de negocio
+- `src/backend/`: servicio de dominio y utilidades HTTP
+- `tests/unit`: pruebas unitarias
+- `tests/integration`: pruebas de integracion
+- `tests/e2e`: pruebas end-to-end
+- `convex/`: schema y auth config base para migracion al backend Convex
+
+## Path de deploy futuro (no parte de P0)
+
+1. Crear proyecto Convex y configurar `CONVEX_DEPLOYMENT` + `NEXT_PUBLIC_CONVEX_URL`.
+2. Activar Firebase Phone Auth en proyecto real y configurar variables `NEXT_PUBLIC_FIREBASE_*`.
+3. Implementar bridge definitivo Firebase token -> Convex auth en funciones Convex.
+4. Cambiar `NEXT_PUBLIC_USE_MOCK_BACKEND=false` y enrutar UI a Convex.
+5. Configurar despliegue en Vercel con variables de entorno.
+6. Ejecutar smoke tests post-deploy (`/`, `/crear`, `/partido/[id]`, join/leave/cancel).
