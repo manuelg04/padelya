@@ -39,6 +39,7 @@ describe("PadelService integration", () => {
     expect(match.participants[0]?.avatarUrl).toBeNull();
     expect(match.status).toBe("abierta");
     expect(match.isOrganizer).toBe(true);
+    expect(match.canLeave).toBe(false);
   });
 
   it("blocks creating matches in the past or with non-hour slots", async () => {
@@ -100,6 +101,36 @@ describe("PadelService integration", () => {
     await service.cancel(match.publicId, organizer);
 
     await expect(service.join(match.publicId, player)).rejects.toMatchObject<DomainError>({
+      code: "MATCH_CANCELED",
+    });
+  });
+
+  it("prevents organizer leave and requires cancel", async () => {
+    const organizer = await createAuthedUser(service, "+573001112212", "Org");
+    const match = service.createMatch(organizer, {
+      club: "Padel Organizer Rule",
+      startsAtLocal: "2030-02-14T12:00",
+      category: "4ta",
+      modality: "mixto",
+    });
+
+    await expect(service.leave(match.publicId, organizer)).rejects.toMatchObject<DomainError>({
+      code: "ORGANIZER_MUST_CANCEL",
+      message: "El organizador no puede salir. Debe cancelar el partido.",
+    });
+  });
+
+  it("returns MATCH_CANCELED before organizer leave rule when match is canceled", async () => {
+    const organizer = await createAuthedUser(service, "+573001112213", "Org");
+    const match = service.createMatch(organizer, {
+      club: "Padel Organizer Canceled Precedence",
+      startsAtLocal: "2030-02-14T13:00",
+      category: "4ta",
+      modality: "mixto",
+    });
+
+    await service.cancel(match.publicId, organizer);
+    await expect(service.leave(match.publicId, organizer)).rejects.toMatchObject<DomainError>({
       code: "MATCH_CANCELED",
     });
   });
@@ -169,6 +200,25 @@ describe("PadelService integration", () => {
     });
 
     await expect(service.followMatchWatch(openMatch.publicId, watcher)).rejects.toMatchObject<DomainError>({
+      code: "VALIDATION_ERROR",
+    });
+  });
+
+  it("blocks organizer from following watchlist on own full match", async () => {
+    const organizer = await createAuthedUser(service, "+573001112245", "Org");
+    const fullMatch = service.createMatch(organizer, {
+      club: "Padel Watch Organizer Rule",
+      startsAtLocal: "2030-02-15T21:00",
+      category: "4ta",
+      modality: "mixto",
+    });
+
+    const p2 = await createAuthedUser(service, "+573001112246", "Jug2");
+    const p3 = await createAuthedUser(service, "+573001112247", "Jug3");
+    const p4 = await createAuthedUser(service, "+573001112248", "Jug4");
+    await fillMatch(service, fullMatch.publicId, [p2, p3, p4]);
+
+    await expect(service.followMatchWatch(fullMatch.publicId, organizer)).rejects.toMatchObject<DomainError>({
       code: "VALIDATION_ERROR",
     });
   });

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarX2, LogIn, Plus, XCircle, Zap } from "lucide-react";
 
 import { useAuth } from "@/src/components/auth/auth-provider";
@@ -10,14 +10,25 @@ import { OpenMatchCard } from "@/src/components/features/open-match-card";
 import { AppShell } from "@/src/components/layout/app-shell";
 import { Button } from "@/src/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/src/components/ui/card";
-import { Label } from "@/src/components/ui/label";
 import { Skeleton } from "@/src/components/ui/skeleton";
+import { groupMatchesByDay } from "@/src/domain/match";
 import type { MatchView, Modality, OpenFeedWindow } from "@/src/domain/types";
 import { listMatches } from "@/src/lib/api/client";
-import { toErrorMessage } from "@/src/lib/utils";
+import { cn, toErrorMessage } from "@/src/lib/utils";
 
 type HomeTab = "inicio" | "mis";
 type FeedModalityFilter = "all" | Modality;
+
+const FEED_PAGE_SIZE = 15;
+const FEED_STORAGE_KEY = "feed-state";
+
+type FeedCacheState = {
+  tab: HomeTab;
+  feedModality: FeedModalityFilter;
+  feedWindow: OpenFeedWindow;
+  visibleCount: number;
+  scrollY: number;
+};
 
 const TABS: { value: HomeTab; label: string }[] = [
   { value: "inicio", label: "Inicio" },
@@ -33,12 +44,12 @@ const FEED_MODALITY_OPTIONS: { value: FeedModalityFilter; label: string }[] = [
 
 const FEED_TIME_OPTIONS: { value: OpenFeedWindow; label: string }[] = [
   { value: "today", label: "Hoy" },
-  { value: "next7", label: "Próximos 7 días" },
+  { value: "next7", label: "7 días" },
 ];
 
 function MatchCardSkeleton() {
   return (
-    <div className="rounded-2xl border border-zinc-200/80 bg-white p-5 shadow-sm space-y-3">
+    <div className="space-y-3 rounded-2xl border border-zinc-200/80 bg-white p-5 shadow-sm">
       <div className="flex items-center justify-between">
         <Skeleton className="h-5 w-32" />
         <Skeleton className="h-6 w-16 rounded-full" />
@@ -52,17 +63,61 @@ function MatchCardSkeleton() {
   );
 }
 
+function readCachedFeedState(): FeedCacheState | null {
+  try {
+    const raw = sessionStorage.getItem(FEED_STORAGE_KEY);
+    if (!raw) return null;
+    sessionStorage.removeItem(FEED_STORAGE_KEY);
+    return JSON.parse(raw) as FeedCacheState;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedFeedState(state: FeedCacheState) {
+  try {
+    sessionStorage.setItem(FEED_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // ignore
+  }
+}
+
 export default function HomePage() {
   const { loading, token, user } = useAuth();
+
+  const didInitializeFiltersRef = useRef(false);
+  const pendingScrollRef = useRef<number | null>(null);
+
+  const [cacheHydrated, setCacheHydrated] = useState(false);
   const [tab, setTab] = useState<HomeTab>("inicio");
   const [feedModality, setFeedModality] = useState<FeedModalityFilter>("all");
   const [feedWindow, setFeedWindow] = useState<OpenFeedWindow>("next7");
+  const [visibleCount, setVisibleCount] = useState(FEED_PAGE_SIZE);
   const [matches, setMatches] = useState<MatchView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const cached = readCachedFeedState();
+    if (cached) {
+      setTab(cached.tab);
+      setFeedModality(cached.feedModality);
+      setFeedWindow(cached.feedWindow);
+      setVisibleCount(cached.visibleCount);
+      if (cached.scrollY > 0) {
+        pendingScrollRef.current = cached.scrollY;
+      }
+    }
+    setCacheHydrated(true);
+  }, []);
+
   const mineToken = tab === "mis" ? token : null;
 
   useEffect(() => {
+    if (!cacheHydrated) {
+      return;
+    }
+
     let disposed = false;
 
     void (async () => {
@@ -97,6 +152,14 @@ export default function HomePage() {
       } finally {
         if (!disposed) {
           setIsLoading(false);
+
+          if (pendingScrollRef.current !== null) {
+            const scrollTarget = pendingScrollRef.current;
+            pendingScrollRef.current = null;
+            requestAnimationFrame(() => {
+              window.scrollTo(0, scrollTarget);
+            });
+          }
         }
       }
     })();
@@ -104,14 +167,53 @@ export default function HomePage() {
     return () => {
       disposed = true;
     };
-  }, [tab, mineToken, feedModality, feedWindow]);
+  }, [cacheHydrated, tab, mineToken, feedModality, feedWindow]);
 
-  const MatchListItem = tab === "inicio" ? OpenMatchCard : MatchCard;
+  useEffect(() => {
+    if (!cacheHydrated) {
+      return;
+    }
+    if (!didInitializeFiltersRef.current) {
+      didInitializeFiltersRef.current = true;
+      return;
+    }
+    setVisibleCount(FEED_PAGE_SIZE);
+  }, [cacheHydrated, feedModality, feedWindow]);
+
+  const saveFeedState = useCallback(() => {
+    writeCachedFeedState({
+      tab,
+      feedModality,
+      feedWindow,
+      visibleCount,
+      scrollY: window.scrollY,
+    });
+  }, [tab, feedModality, feedWindow, visibleCount]);
+
+  useEffect(() => {
+    window.addEventListener("beforeunload", saveFeedState);
+    return () => {
+      saveFeedState();
+      window.removeEventListener("beforeunload", saveFeedState);
+    };
+  }, [saveFeedState]);
+
+  const visibleMatches = useMemo(
+    () => (tab === "inicio" ? matches.slice(0, visibleCount) : matches),
+    [tab, matches, visibleCount],
+  );
+
+  const dayGroups = useMemo(
+    () => (tab === "inicio" ? groupMatchesByDay(visibleMatches) : []),
+    [tab, visibleMatches],
+  );
+
+  const hasMore = tab === "inicio" && visibleCount < matches.length;
+  const hasActiveFilters = feedModality !== "all" || feedWindow !== "next7";
 
   return (
     <AppShell>
       <section className="space-y-5">
-        {/* Hero banner */}
         <div className="rounded-2xl border border-emerald-200/60 bg-linear-to-br from-emerald-50 to-white p-5 shadow-sm">
           <div className="flex items-start gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100">
@@ -141,15 +243,12 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Tabs */}
         <div className="flex w-full border-b border-zinc-200">
           {TABS.map(({ value, label }) => (
             <button
               key={value}
               className={`relative min-h-[44px] flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${
-                tab === value
-                  ? "text-emerald-700"
-                  : "text-zinc-500 hover:text-zinc-700"
+                tab === value ? "text-emerald-700" : "text-zinc-500 hover:text-zinc-700"
               }`}
               onClick={() => setTab(value)}
               type="button"
@@ -163,49 +262,43 @@ export default function HomePage() {
         </div>
 
         {tab === "inicio" ? (
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-lg">Partidos abiertos</CardTitle>
-              <CardDescription>Vista pública en modo lectura para descubrir partidos con cupos disponibles.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="feed-modality">Modalidad</Label>
-                  <select
-                    id="feed-modality"
-                    className="flex min-h-[44px] w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                    value={feedModality}
-                    onChange={(event) => setFeedModality(event.target.value as FeedModalityFilter)}
-                  >
-                    {FEED_MODALITY_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="feed-window">Tiempo</Label>
-                  <select
-                    id="feed-window"
-                    className="flex min-h-[44px] w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                    value={feedWindow}
-                    onChange={(event) => setFeedWindow(event.target.value as OpenFeedWindow)}
-                  >
-                    {FEED_TIME_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          <div className="flex flex-wrap items-center gap-2">
+            {FEED_MODALITY_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                aria-pressed={feedModality === opt.value}
+                className={cn(
+                  "min-h-[36px] rounded-full px-3.5 py-1.5 text-sm font-medium ring-1 ring-inset transition-colors",
+                  feedModality === opt.value
+                    ? "bg-emerald-600 text-white ring-emerald-600"
+                    : "bg-white text-zinc-600 ring-zinc-200 hover:bg-zinc-50",
+                )}
+                onClick={() => setFeedModality(opt.value)}
+              >
+                {opt.label}
+              </button>
+            ))}
+            <div className="mx-1 h-5 w-px self-center bg-zinc-200" />
+            {FEED_TIME_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                aria-pressed={feedWindow === opt.value}
+                className={cn(
+                  "min-h-[36px] rounded-full px-3.5 py-1.5 text-sm font-medium ring-1 ring-inset transition-colors",
+                  feedWindow === opt.value
+                    ? "bg-emerald-600 text-white ring-emerald-600"
+                    : "bg-white text-zinc-600 ring-zinc-200 hover:bg-zinc-50",
+                )}
+                onClick={() => setFeedWindow(opt.value)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
         ) : null}
 
-        {/* Login prompt for "Mis partidos" */}
         {tab === "mis" && !loading && !user ? (
           <Card>
             <CardHeader className="items-center text-center">
@@ -226,16 +319,14 @@ export default function HomePage() {
           </Card>
         ) : null}
 
-        {/* Loading skeletons */}
         {isLoading ? (
           <div className="space-y-3">
-            <MatchCardSkeleton />
-            <MatchCardSkeleton />
-            <MatchCardSkeleton />
+            {Array.from({ length: 5 }, (_, i) => (
+              <MatchCardSkeleton key={i} />
+            ))}
           </div>
         ) : null}
 
-        {/* Error state */}
         {error ? (
           <div className="flex items-start gap-2 rounded-xl bg-rose-50 p-3.5 text-sm text-rose-700 ring-1 ring-inset ring-rose-200">
             <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -243,7 +334,6 @@ export default function HomePage() {
           </div>
         ) : null}
 
-        {/* Empty state */}
         {!isLoading && !error && matches.length === 0 && tab === "inicio" ? (
           <Card>
             <CardHeader className="items-center text-center">
@@ -253,6 +343,19 @@ export default function HomePage() {
               <CardTitle>No hay partidos abiertos en este rango</CardTitle>
               <CardDescription>Ajusta los filtros para ver más opciones disponibles.</CardDescription>
             </CardHeader>
+            {hasActiveFilters ? (
+              <CardContent className="flex justify-center">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setFeedModality("all");
+                    setFeedWindow("next7");
+                  }}
+                >
+                  Quitar filtros
+                </Button>
+              </CardContent>
+            ) : null}
           </Card>
         ) : null}
 
@@ -276,10 +379,38 @@ export default function HomePage() {
           </Card>
         ) : null}
 
-        {!isLoading && !error && matches.length > 0 ? (
+        {!isLoading && !error && matches.length > 0 && tab === "inicio" ? (
+          <div className="space-y-5">
+            {dayGroups.map((group) => (
+              <div key={group.dateKey} className="space-y-3">
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
+                  {group.label}
+                </h3>
+                {group.matches.map((match) => (
+                  <OpenMatchCard key={match.publicId} match={match} />
+                ))}
+              </div>
+            ))}
+
+            {hasMore ? (
+              <div className="flex justify-center pt-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setVisibleCount((prev) => prev + FEED_PAGE_SIZE)}
+                >
+                  Cargar más
+                </Button>
+              </div>
+            ) : matches.length > FEED_PAGE_SIZE ? (
+              <p className="pt-2 text-center text-sm text-zinc-400">No hay más partidos</p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {!isLoading && !error && matches.length > 0 && tab === "mis" ? (
           <div className="space-y-3">
             {matches.map((match) => (
-              <MatchListItem key={match.publicId} match={match} />
+              <MatchCard key={match.publicId} match={match} />
             ))}
           </div>
         ) : null}

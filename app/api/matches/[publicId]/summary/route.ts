@@ -12,7 +12,7 @@ export async function GET(
     const token = (await resolveAuthToken(request)) ?? undefined;
     const { publicId: rawPublicId } = await params;
     const publicId = normalizePublicId(rawPublicId);
-    const summary = await padelService.getWhatsAppSummary(publicId, token);
+    const summary = await padelService.getWhatsAppSummary(publicId, token, request.nextUrl.origin);
     return responseOk({ summary });
   } catch (error) {
     return responseError(error);

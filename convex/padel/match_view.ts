@@ -61,7 +61,7 @@ export async function buildMatchView(ctx: ReadCtx, match: MatchDoc, actorUserId:
     participants,
     isOrganizer: Boolean(actorUserId && match.organizerUserId === actorUserId),
     canJoin: Boolean(actorUserId && !isJoined && status === "abierta"),
-    canLeave: Boolean(actorUserId && isJoined && status !== "cancelada"),
+    canLeave: Boolean(actorUserId && isJoined && status !== "cancelada" && match.organizerUserId !== actorUserId),
     isCanceled: status === "cancelada",
     isWatchingReleaseSpot,
   };

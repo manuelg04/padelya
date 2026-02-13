@@ -187,6 +187,9 @@ export async function followMatchWatchHandler(ctx: WriteCtx, args: PublicIdActor
   if (match.canceledAt) {
     throw new Error("MATCH_CANCELED");
   }
+  if (match.organizerUserId === user._id) {
+    throw new Error("VALIDATION_ERROR");
+  }
 
   const participants = await listParticipantsForMatch(ctx, match._id);
   const participantUserIds = new Set(participants.map((participant) => participant.userId));
@@ -296,6 +299,13 @@ export async function joinHandler(ctx: WriteCtx, args: PublicIdActorArgs): Promi
 export async function leaveHandler(ctx: WriteCtx, args: PublicIdActorArgs): Promise<MatchView> {
   const user = await ensureUser(ctx, args.actor);
   const match = await requireMatchByPublicId(ctx, args.publicId);
+
+  if (match.canceledAt) {
+    throw new Error("MATCH_CANCELED");
+  }
+  if (match.organizerUserId === user._id) {
+    throw new Error("ORGANIZER_MUST_CANCEL");
+  }
 
   const now = nowIso();
   const participantsBefore = await listParticipantsForMatch(ctx, match._id);

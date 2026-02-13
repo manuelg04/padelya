@@ -85,6 +85,7 @@ function mapDomainCodeToStatus(code: DomainError["code"]): number {
     case "OTP_EXPIRED":
     case "MATCH_FULL":
     case "MATCH_CANCELED":
+    case "ORGANIZER_MUST_CANCEL":
     case "ALREADY_JOINED":
     case "NOT_JOINED":
     case "ALIAS_REQUIRED":

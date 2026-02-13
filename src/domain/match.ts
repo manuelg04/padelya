@@ -62,7 +62,7 @@ export function utcIsoToBogotaParts(utcIso: string): { date: string; time: strin
   };
 }
 
-function getBogotaDateKey(date: Date): string {
+export function getBogotaDateKey(date: Date): string {
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Bogota",
     year: "numeric",
@@ -136,21 +136,102 @@ export function getOpenFeedUtcRange(window: OpenFeedWindow, now: Date = new Date
   };
 }
 
-export function buildWhatsAppSummary(match: MatchView, shareUrl: string): string {
-  const { date, time } = utcIsoToBogotaParts(match.startsAtUtc);
-  const players = match.participants.map((participant, index) => `${index + 1}. ${participant.alias}`);
-  const playersText = players.length ? players.join("\n") : "Sin confirmados";
+export type DayGroup = { dateKey: string; label: string; matches: MatchView[] };
 
-  return [
-    "🎾 Partido de Pádel",
-    `Club: ${match.club}`,
-    `Fecha: ${date}`,
-    `Hora: ${time}`,
-    `Categoría: ${match.category}`,
-    `Modalidad: ${match.modality}`,
-    `Confirmados (${match.participants.length}/${MAX_PLAYERS}):`,
-    playersText,
-    `Estado: ${match.status}`,
-    `Link: ${shareUrl}`,
-  ].join("\n");
+export function groupMatchesByDay(matches: MatchView[], now: Date = new Date()): DayGroup[] {
+  if (matches.length === 0) {
+    return [];
+  }
+
+  const todayKey = getBogotaDateKey(now);
+  const tomorrowKey = getBogotaDateKey(new Date(now.getTime() + 24 * 60 * 60 * 1000));
+
+  const groups: DayGroup[] = [];
+  let current: DayGroup | null = null;
+
+  for (const match of matches) {
+    const dateKey = getBogotaDateKey(new Date(match.startsAtUtc));
+
+    if (!current || current.dateKey !== dateKey) {
+      let label: string;
+      if (dateKey === todayKey) {
+        label = "Hoy";
+      } else if (dateKey === tomorrowKey) {
+        label = "Mañana";
+      } else {
+        const parts = utcIsoToBogotaParts(match.startsAtUtc);
+        label = parts.date;
+      }
+
+      current = { dateKey, label, matches: [] };
+      groups.push(current);
+    }
+
+    current.matches.push(match);
+  }
+
+  return groups;
+}
+
+const MODALITY_LABEL: Record<MatchView["modality"], string> = {
+  mixto: "Mixto",
+  masc: "Masc",
+  fem: "Fem",
+};
+
+function formatBogotaTime12h(utcIso: string): string {
+  const formatter = new Intl.DateTimeFormat("es-CO", {
+    timeZone: "America/Bogota",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+
+  const parts = formatter.formatToParts(new Date(utcIso));
+  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const hour = byType.hour ?? "0";
+  const minute = byType.minute ?? "00";
+  const dayPeriod = (byType.dayPeriod ?? "").replace(/[.\s]/g, "").toLowerCase();
+
+  return dayPeriod ? `${hour}:${minute} ${dayPeriod}` : `${hour}:${minute}`;
+}
+
+export function buildWhatsAppSummary(match: MatchView, shareUrl: string, now: Date = new Date()): string {
+  const startsAtDate = new Date(match.startsAtUtc);
+  const { date } = utcIsoToBogotaParts(match.startsAtUtc);
+  const time = formatBogotaTime12h(match.startsAtUtc);
+  const startsAtDateKey = getBogotaDateKey(startsAtDate);
+  const todayDateKey = getBogotaDateKey(now);
+  const tomorrowDateKey = getBogotaDateKey(new Date(now.getTime() + 24 * 60 * 60 * 1000));
+
+  let dayLabel = date;
+  if (startsAtDateKey === todayDateKey) {
+    dayLabel = "Hoy";
+  } else if (startsAtDateKey === tomorrowDateKey) {
+    dayLabel = "Mañana";
+  }
+
+  const lines: string[] = [match.club, `${dayLabel} ${time} · ${MODALITY_LABEL[match.modality]}`];
+
+  if (match.isCanceled) {
+    lines.push("Cancelado");
+    lines.push(`Ver detalles: ${shareUrl}`);
+    return lines.join("\n");
+  }
+
+  const confirmedNames = match.participants.slice(0, MAX_PLAYERS).map((participant) => participant.alias);
+  const confirmedCount = confirmedNames.length;
+  const namesLabel = confirmedNames.length > 0 ? confirmedNames.join(", ") : "—";
+  lines.push(`Confirmados (${confirmedCount}/${MAX_PLAYERS}): ${namesLabel}`);
+
+  const remaining = MAX_PLAYERS - confirmedCount;
+  if (remaining > 0) {
+    lines.push(`Faltan ${remaining} ${remaining === 1 ? "cupo" : "cupos"}`);
+    lines.push(`Únete aquí: ${shareUrl}`);
+  } else {
+    lines.push("Completo");
+    lines.push(`Ver detalles: ${shareUrl}`);
+  }
+
+  return lines.join("\n");
 }

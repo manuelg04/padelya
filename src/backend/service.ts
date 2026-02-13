@@ -326,6 +326,9 @@ export class PadelService {
       if (match.canceledAt) {
         throw new DomainError("MATCH_CANCELED", "El partido está cancelado.");
       }
+      if (match.organizerUserId === actor.id) {
+        throw new DomainError("VALIDATION_ERROR", "El organizador no puede activar avisos en su propio partido.");
+      }
       if (participants.has(actor.id)) {
         throw new DomainError("VALIDATION_ERROR", "Ya estás en este partido.");
       }
@@ -417,6 +420,15 @@ export class PadelService {
     return this.getLock(match.id).withLock(async () => {
       const participants = this.mustGetParticipants(match.id);
       const participantsBefore = participants.size;
+      if (match.canceledAt) {
+        throw new DomainError("MATCH_CANCELED", "El partido está cancelado.");
+      }
+      if (match.organizerUserId === actor.id) {
+        throw new DomainError(
+          "ORGANIZER_MUST_CANCEL",
+          "El organizador no puede salir. Debe cancelar el partido.",
+        );
+      }
       if (!participants.has(actor.id)) {
         throw new DomainError("NOT_JOINED", "No estabas en este partido.");
       }
@@ -495,9 +507,9 @@ export class PadelService {
     });
   }
 
-  getWhatsAppSummary(publicId: string, token?: string): string {
+  getWhatsAppSummary(publicId: string, token?: string, origin?: string): string {
     const match = this.getMatch(publicId, token);
-    const shareUrl = `/partido/${publicId}`;
+    const shareUrl = origin ? `${origin}/partido/${publicId}` : `/partido/${publicId}`;
     return buildWhatsAppSummary(match, shareUrl);
   }
 
@@ -715,7 +727,9 @@ export class PadelService {
     const status = deriveMatchStatus(participants.length, match.canceledAt);
     const isJoined = Boolean(actorUserId && participants.some((p) => p.userId === actorUserId));
     const canJoin = Boolean(actorUserId && !isJoined && status === "abierta");
-    const canLeave = Boolean(actorUserId && isJoined && status !== "cancelada");
+    const canLeave = Boolean(
+      actorUserId && isJoined && status !== "cancelada" && match.organizerUserId !== actorUserId,
+    );
     const now = nowIso();
 
     let isWatchingReleaseSpot = false;

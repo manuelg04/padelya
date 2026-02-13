@@ -7,11 +7,11 @@ async function completeAuth(page: Page, phone: string, alias: string, redirect: 
   await page.getByTestId("otp-input").fill("123456");
   await page.getByTestId("verify-otp-btn").click();
 
-  await page.waitForLoadState("networkidle");
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 15000 });
   if (page.url().includes("/perfil")) {
     await page.getByLabel("Alias").fill(alias);
     await page.getByRole("button", { name: "Guardar alias" }).click();
-    await page.waitForLoadState("networkidle");
+    await page.waitForURL((url) => !url.pathname.startsWith("/perfil"), { timeout: 15000 });
   }
 }
 
@@ -140,6 +140,13 @@ async function seedOpenFeedData(request: APIRequestContext) {
   return { femClubName: "Club Feed Fem", femPublicId: femMatch.publicId };
 }
 
+async function copySummaryFromUi(page: Page, expectedSnippet: string): Promise<string> {
+  await page.getByTestId("copy-summary-btn").click();
+  await expect(page.getByText("Resumen copiado para WhatsApp.")).toBeVisible();
+  await expect.poll(async () => page.evaluate(() => navigator.clipboard.readText())).toContain(expectedSnippet);
+  return page.evaluate(() => navigator.clipboard.readText());
+}
+
 test.beforeEach(async ({ request }) => {
   await request.post("/api/test/reset");
 });
@@ -160,6 +167,7 @@ test("happy path P0: crear, ver link público, join/leave, cancelado, copiar res
   await expect(page).toHaveURL(/\/partido\/[a-z0-9]+/i);
   await expect(page.getByRole("heading", { name: "Confirmados" })).toBeVisible();
   await expect(page.getByText("1/4")).toBeVisible();
+  await expect(page.getByTestId("leave-btn")).toHaveCount(0);
 
   await page.getByTestId("copy-summary-btn").click();
   await expect(page.getByText("Resumen copiado para WhatsApp.")).toBeVisible();
@@ -204,6 +212,14 @@ test("happy path P0: crear, ver link público, join/leave, cancelado, copiar res
   await expect(publicTab.getByText("Saliste del partido.")).toBeVisible();
 
   await page.getByTestId("cancel-btn").click();
+  await expect(page.getByRole("dialog", { name: "Cancelar partido" })).toBeVisible();
+  await expect(page.getByText("Si cancelas, el partido se cerrará para todos y dejará de aparecer como abierto.")).toBeVisible();
+  await page.getByTestId("cancel-confirm-back-btn").click();
+  await expect(page.getByRole("dialog", { name: "Cancelar partido" })).toHaveCount(0);
+  await expect(page.getByTestId("canceled-banner")).toHaveCount(0);
+
+  await page.getByTestId("cancel-btn").click();
+  await page.getByTestId("confirm-cancel-btn").click();
   await expect(page.getByTestId("canceled-banner")).toBeVisible();
 
   await publicTab.reload();
@@ -213,26 +229,104 @@ test("happy path P0: crear, ver link público, join/leave, cancelado, copiar res
   await publicPage.close();
 });
 
+test("whatsapp summary E2E: open/full states show names, urgency and CTA rules", async ({ page, request }) => {
+  const organizer = await createApiUser(request, "3002223344", "Resumen Org");
+  const match = await createApiMatch(request, organizer, {
+    club: "Padel WA Real",
+    startsAtLocal: "2030-03-01T20:00",
+    category: "4ta",
+    modality: "mixto",
+  });
+
+  await page.goto(`/partido/${match.publicId}`);
+  await expect(page.getByRole("heading", { name: "Confirmados" })).toBeVisible();
+  await expect(page.getByText("1/4")).toBeVisible();
+
+  const summaryOneOfFour = await copySummaryFromUi(page, "Confirmados (1/4):");
+  expect(summaryOneOfFour).toContain("Padel WA Real");
+  expect(summaryOneOfFour).toContain("· Mixto");
+  expect(summaryOneOfFour).toContain("Confirmados (1/4): Resumen Org");
+  expect(summaryOneOfFour).toContain("Faltan 3 cupos");
+  const joinLineOneOfFour = summaryOneOfFour.split("\n").at(-1) ?? "";
+  expect(joinLineOneOfFour).toMatch(new RegExp(`^Únete aquí: https?://[^\\s]+/partido/${match.publicId}$`));
+  expect(new URL(joinLineOneOfFour.replace("Únete aquí: ", "")).pathname).toBe(`/partido/${match.publicId}`);
+
+  const p2 = await createApiUser(request, "3002223345", "Resumen Dos");
+  const p3 = await createApiUser(request, "3002223346", "Resumen Tres");
+  await joinApiMatch(request, p2, match.publicId);
+  await joinApiMatch(request, p3, match.publicId);
+
+  await page.reload();
+  await expect(page.getByText("3/4")).toBeVisible();
+
+  const summaryThreeOfFour = await copySummaryFromUi(page, "Confirmados (3/4):");
+  expect(summaryThreeOfFour).toContain("Confirmados (3/4): Resumen Org, Resumen Dos, Resumen Tres");
+  expect(summaryThreeOfFour).toContain("Faltan 1 cupo");
+  expect(summaryThreeOfFour).not.toContain("Faltan 0 cupos");
+  const joinLineThreeOfFour = summaryThreeOfFour.split("\n").at(-1) ?? "";
+  expect(joinLineThreeOfFour).toMatch(new RegExp(`^Únete aquí: https?://[^\\s]+/partido/${match.publicId}$`));
+
+  const p4 = await createApiUser(request, "3002223347", "Resumen Cuatro");
+  await joinApiMatch(request, p4, match.publicId);
+
+  await page.reload();
+  await expect(page.getByText("Estado: Lleno (4/4)")).toBeVisible();
+
+  const summaryFourOfFour = await copySummaryFromUi(page, "Confirmados (4/4):");
+  expect(summaryFourOfFour).toContain("Confirmados (4/4): Resumen Org, Resumen Dos, Resumen Tres, Resumen Cuatro");
+  expect(summaryFourOfFour).toContain("Completo");
+  const detailsLineFourOfFour = summaryFourOfFour.split("\n").at(-1) ?? "";
+  expect(detailsLineFourOfFour).toMatch(new RegExp(`^Ver detalles: https?://[^\\s]+/partido/${match.publicId}$`));
+  expect(new URL(detailsLineFourOfFour.replace("Ver detalles: ", "")).pathname).toBe(`/partido/${match.publicId}`);
+  expect(summaryFourOfFour).not.toContain("Faltan");
+  expect(summaryFourOfFour).not.toContain("Únete aquí");
+});
+
+test("whatsapp summary E2E: canceled match does not invite joining", async ({ page, request }) => {
+  const organizer = await createApiUser(request, "3003334455", "Resumen Cancel");
+  const match = await createApiMatch(request, organizer, {
+    club: "Padel WA Cancelado",
+    startsAtLocal: "2030-03-02T20:00",
+    category: "4ta",
+    modality: "masc",
+  });
+  const participant = await createApiUser(request, "3003334456", "Resumen Invitado");
+  await joinApiMatch(request, participant, match.publicId);
+  await cancelApiMatch(request, organizer, match.publicId);
+
+  await page.goto(`/partido/${match.publicId}`);
+  await expect(page.getByTestId("canceled-banner")).toBeVisible();
+
+  const summaryCanceled = await copySummaryFromUi(page, "Cancelado");
+  expect(summaryCanceled).toContain("Padel WA Cancelado");
+  expect(summaryCanceled).toContain("· Masc");
+  expect(summaryCanceled).toContain("Cancelado");
+  const detailsLineCanceled = summaryCanceled.split("\n").at(-1) ?? "";
+  expect(detailsLineCanceled).toMatch(new RegExp(`^Ver detalles: https?://[^\\s]+/partido/${match.publicId}$`));
+  expect(new URL(detailsLineCanceled.replace("Ver detalles: ", "")).pathname).toBe(`/partido/${match.publicId}`);
+  expect(summaryCanceled).not.toContain("Confirmados");
+  expect(summaryCanceled).not.toContain("Faltan");
+  expect(summaryCanceled).not.toContain("Únete aquí");
+});
+
 test("feed publico: filtra partidos abiertos y abre detalle sin login", async ({ page, request }) => {
   const seeded = await seedOpenFeedData(request);
 
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Partidos abiertos" })).toBeVisible();
-
   await expect(page.getByText("Club Feed Mixto")).toBeVisible();
   await expect(page.getByText("Club Feed Fem")).toBeVisible();
   await expect(page.getByText("Club Feed Lleno")).toHaveCount(0);
   await expect(page.getByText("Club Feed Cancelado")).toHaveCount(0);
   await expect(page.getByText("Club Feed Fuera Ventana")).toHaveCount(0);
 
-  await page.getByLabel("Modalidad").selectOption("fem");
+  await page.getByRole("button", { name: "Fem" }).click();
   await expect(page.getByText("Club Feed Fem")).toBeVisible();
   await expect(page.getByText("Club Feed Mixto")).toHaveCount(0);
 
-  await page.getByLabel("Tiempo").selectOption("today");
+  await page.getByRole("button", { name: "Hoy" }).click();
   await expect(page.getByText("No hay partidos abiertos en este rango")).toBeVisible();
 
-  await page.getByLabel("Tiempo").selectOption("next7");
+  await page.getByRole("button", { name: "7 días" }).click();
   await expect(page.getByText(seeded.femClubName)).toBeVisible();
 
   await page.getByRole("link", { name: `Ver ${seeded.femClubName}` }).click();
@@ -277,6 +371,50 @@ test("watchlist: avisa en 4->3 y el detalle refleja refill rápido", async ({ pa
   await expect(page).toHaveURL(new RegExp(`/partido/${match.publicId}\\?cta=join$`));
   await expect(page.getByText("Estado: Lleno (4/4)")).toBeVisible();
   await expect(page.getByTestId("join-btn")).toHaveCount(0);
+});
+
+test("organizer leave API legacy returns ORGANIZER_MUST_CANCEL", async ({ request }) => {
+  const organizer = await createApiUser(request, "3009991100", "Legacy Org");
+  const match = await createApiMatch(request, organizer, {
+    club: "Padel Legacy Leave",
+    startsAtLocal: "2030-02-26T19:00",
+    category: "4ta",
+    modality: "mixto",
+  });
+
+  const leaveResponse = await request.post(`/api/matches/${match.publicId}/leave`, {
+    headers: {
+      Authorization: `Bearer ${organizer}`,
+    },
+  });
+  expect(leaveResponse.status()).toBe(400);
+  const leaveBody = (await leaveResponse.json()) as { error?: { code?: string; message?: string } };
+  expect(leaveBody.error?.code).toBe("ORGANIZER_MUST_CANCEL");
+  expect(leaveBody.error?.message).toBe("El organizador no puede salir. Debe cancelar el partido.");
+});
+
+test("organizer does not see watchlist CTA on own full match", async ({ page, request }) => {
+  const organizerPhone = "3009991200";
+  const organizer = await createApiUser(request, organizerPhone, "Watch Org Owner");
+  const match = await createApiMatch(request, organizer, {
+    club: "Padel Organizer Full",
+    startsAtLocal: "2030-02-27T19:00",
+    category: "4ta",
+    modality: "mixto",
+  });
+  const p2 = await createApiUser(request, "3009991201", "Org Full P2");
+  const p3 = await createApiUser(request, "3009991202", "Org Full P3");
+  const p4 = await createApiUser(request, "3009991203", "Org Full P4");
+  await joinApiMatch(request, p2, match.publicId);
+  await joinApiMatch(request, p3, match.publicId);
+  await joinApiMatch(request, p4, match.publicId);
+
+  await completeAuth(page, organizerPhone, "Watch Org Owner", `/partido/${match.publicId}`);
+  await expect(page).toHaveURL(new RegExp(`/partido/${match.publicId}$`));
+  await expect(page.getByText("Estado: Lleno (4/4)")).toBeVisible();
+  await expect(page.getByTestId("leave-btn")).toHaveCount(0);
+  await expect(page.getByTestId("follow-watch-btn")).toHaveCount(0);
+  await expect(page.getByTestId("cancel-btn")).toBeVisible();
 });
 
 test("security: watch and notifications endpoints require auth", async ({ request }) => {

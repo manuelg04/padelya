@@ -6,6 +6,7 @@ import {
   deriveMatchStatus,
   formatFeedSchedule,
   getOpenFeedUtcRange,
+  groupMatchesByDay,
   isFutureBogotaLocalDateTime,
   isWholeHourBogotaLocalDateTime,
   isValidAlias,
@@ -17,6 +18,38 @@ import { AVATAR_MAX_BYTES, getAvatarInitials, validateAvatarFile } from "@/src/l
 import { normalizePublicId } from "@/src/lib/public-id";
 
 describe("domain/match", () => {
+  const summaryNow = new Date("2026-02-12T15:00:00.000Z");
+  const shareUrl = "https://app.test/partido/abc123";
+
+  const buildParticipant = (
+    userId: string,
+    alias: string,
+    joinedAt: string,
+  ): MatchView["participants"][number] => ({
+    userId,
+    alias,
+    joinedAt,
+    avatarUrl: null,
+  });
+
+  const buildMatch = (overrides: Partial<MatchView> = {}): MatchView => ({
+    publicId: "abc123",
+    organizerUserId: "u1",
+    club: "Padel CC",
+    startsAtUtc: "2026-02-13T01:30:00.000Z",
+    timezone: "America/Bogota",
+    category: "4ta",
+    modality: "mixto",
+    status: "abierta",
+    participants: [buildParticipant("u1", "Ana", "2026-01-01T00:00:00.000Z")],
+    isOrganizer: true,
+    canJoin: false,
+    canLeave: false,
+    isCanceled: false,
+    isWatchingReleaseSpot: false,
+    ...overrides,
+  });
+
   it("normalizes and validates aliases", () => {
     expect(normalizeAlias("  Juan   Perez ")).toBe("Juan Perez");
     expect(isValidAlias("Ju")).toBe(false);
@@ -70,32 +103,96 @@ describe("domain/match", () => {
     expect(range.toInclusiveUtc).toBe("2026-02-19T15:30:00.000Z");
   });
 
-  it("builds whatsapp summary with emoji and key fields", () => {
-    const match: MatchView = {
-      publicId: "abc123",
-      organizerUserId: "u1",
-      club: "Padel House",
-      startsAtUtc: "2026-02-13T01:30:00.000Z",
-      timezone: "America/Bogota",
-      category: "4ta",
-      modality: "mixto",
-      status: "abierta",
-      participants: [
-        { userId: "u1", alias: "Ana", joinedAt: "2026-01-01T00:00:00.000Z", avatarUrl: null },
-      ],
-      isOrganizer: true,
-      canJoin: false,
-      canLeave: true,
-      isCanceled: false,
-      isWatchingReleaseSpot: false,
-    };
+  it("builds whatsapp summary for open match with organizer only (1/4)", () => {
+    const summary = buildWhatsAppSummary(buildMatch(), shareUrl, summaryNow);
 
-    const summary = buildWhatsAppSummary(match, "https://app.test/partido/abc123");
-    expect(summary).toContain("🎾 Partido de Pádel");
-    expect(summary).toContain("Club: Padel House");
-    expect(summary).toContain("Confirmados (1/4)");
-    expect(summary).toContain("1. Ana");
-    expect(summary).toContain("Estado: abierta");
+    expect(summary).toBe(
+      [
+        "Padel CC",
+        "Hoy 8:30 pm · Mixto",
+        "Confirmados (1/4): Ana",
+        "Faltan 3 cupos",
+        `Únete aquí: ${shareUrl}`,
+      ].join("\n"),
+    );
+  });
+
+  it("builds whatsapp summary for match with 3/4 and singular urgency", () => {
+    const match = buildMatch({
+      startsAtUtc: "2026-02-14T01:30:00.000Z",
+      participants: [
+        buildParticipant("u1", "Ana", "2026-01-01T00:00:00.000Z"),
+        buildParticipant("u2", "Bob", "2026-01-01T00:01:00.000Z"),
+        buildParticipant("u3", "Carlos", "2026-01-01T00:02:00.000Z"),
+      ],
+    });
+
+    const summary = buildWhatsAppSummary(match, shareUrl, summaryNow);
+
+    expect(summary).toBe(
+      [
+        "Padel CC",
+        "Mañana 8:30 pm · Mixto",
+        "Confirmados (3/4): Ana, Bob, Carlos",
+        "Faltan 1 cupo",
+        `Únete aquí: ${shareUrl}`,
+      ].join("\n"),
+    );
+  });
+
+  it("builds whatsapp summary for full match (4/4) and caps names to four", () => {
+    const match = buildMatch({
+      startsAtUtc: "2026-02-15T01:30:00.000Z",
+      status: "cerrada",
+      participants: [
+        buildParticipant("u1", "Ana", "2026-01-01T00:00:00.000Z"),
+        buildParticipant("u2", "Bob", "2026-01-01T00:01:00.000Z"),
+        buildParticipant("u3", "Carlos", "2026-01-01T00:02:00.000Z"),
+        buildParticipant("u4", "Diana", "2026-01-01T00:03:00.000Z"),
+        buildParticipant("u5", "Extra", "2026-01-01T00:04:00.000Z"),
+      ],
+    });
+
+    const summary = buildWhatsAppSummary(match, shareUrl, summaryNow);
+
+    expect(summary).toBe(
+      [
+        "Padel CC",
+        "14/02/2026 8:30 pm · Mixto",
+        "Confirmados (4/4): Ana, Bob, Carlos, Diana",
+        "Completo",
+        `Ver detalles: ${shareUrl}`,
+      ].join("\n"),
+    );
+    expect(summary).not.toContain("Faltan");
+    expect(summary).not.toContain("Únete aquí");
+    expect(summary).not.toContain("Extra");
+  });
+
+  it("builds whatsapp summary for canceled match without join urgency", () => {
+    const match = buildMatch({
+      startsAtUtc: "2026-02-15T01:30:00.000Z",
+      status: "cancelada",
+      isCanceled: true,
+      participants: [
+        buildParticipant("u1", "Ana", "2026-01-01T00:00:00.000Z"),
+        buildParticipant("u2", "Bob", "2026-01-01T00:01:00.000Z"),
+      ],
+    });
+
+    const summary = buildWhatsAppSummary(match, shareUrl, summaryNow);
+
+    expect(summary).toBe(
+      [
+        "Padel CC",
+        "14/02/2026 8:30 pm · Mixto",
+        "Cancelado",
+        `Ver detalles: ${shareUrl}`,
+      ].join("\n"),
+    );
+    expect(summary).not.toContain("Confirmados");
+    expect(summary).not.toContain("Faltan");
+    expect(summary).not.toContain("Únete aquí");
   });
 
   it("formats feed schedule with human labels and one-hour range", () => {
@@ -117,6 +214,47 @@ describe("domain/match", () => {
     expect(getAvatarInitials("Daniel Gonzalez")).toBe("DG");
     expect(getAvatarInitials("Juan David Pérez")).toBe("JP");
     expect(getAvatarInitials("  maria   jose  ")).toBe("MJ");
+  });
+
+  it("groups matches by Bogotá day with Hoy and Mañana labels", () => {
+    const now = new Date("2026-02-12T15:00:00.000Z");
+
+    const makeMatch = (startsAtUtc: string): MatchView => ({
+      publicId: startsAtUtc,
+      organizerUserId: "u1",
+      club: "Club",
+      startsAtUtc,
+      timezone: "America/Bogota",
+      category: "4ta",
+      modality: "mixto",
+      status: "abierta",
+      participants: [],
+      isOrganizer: false,
+      canJoin: true,
+      canLeave: false,
+      isCanceled: false,
+      isWatchingReleaseSpot: false,
+    });
+
+    const matches = [
+      makeMatch("2026-02-12T20:00:00.000Z"),
+      makeMatch("2026-02-12T22:00:00.000Z"),
+      makeMatch("2026-02-13T20:00:00.000Z"),
+      makeMatch("2026-02-14T20:00:00.000Z"),
+    ];
+
+    const groups = groupMatchesByDay(matches, now);
+    expect(groups).toHaveLength(3);
+    expect(groups[0].label).toBe("Hoy");
+    expect(groups[0].matches).toHaveLength(2);
+    expect(groups[1].label).toBe("Mañana");
+    expect(groups[1].matches).toHaveLength(1);
+    expect(groups[2].label).toBeTruthy();
+    expect(groups[2].matches).toHaveLength(1);
+  });
+
+  it("returns empty array when grouping empty matches", () => {
+    expect(groupMatchesByDay([])).toEqual([]);
   });
 
   it("validates avatar file type and size", () => {

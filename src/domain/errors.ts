@@ -1,6 +1,7 @@
 export type DomainErrorCode =
   | "MATCH_FULL"
   | "MATCH_CANCELED"
+  | "ORGANIZER_MUST_CANCEL"
   | "ALREADY_JOINED"
   | "NOT_JOINED"
   | "ALIAS_REQUIRED"

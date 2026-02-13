@@ -19,6 +19,7 @@ import type {
 const DOMAIN_ERROR_MESSAGES: Record<DomainErrorCode, string> = {
   MATCH_FULL: "El partido ya está completo.",
   MATCH_CANCELED: "El partido está cancelado.",
+  ORGANIZER_MUST_CANCEL: "El organizador no puede salir. Debe cancelar el partido.",
   ALREADY_JOINED: "Ya estás confirmado en este partido.",
   NOT_JOINED: "No estabas en este partido.",
   ALIAS_REQUIRED: "Debes definir tu alias antes de continuar.",
@@ -272,9 +273,10 @@ export class ConvexPadelService {
     }
   }
 
-  async getWhatsAppSummary(publicId: string, token?: string): Promise<string> {
+  async getWhatsAppSummary(publicId: string, token?: string, origin?: string): Promise<string> {
     const match = await this.getMatch(publicId, token);
-    return buildWhatsAppSummary(match, `/partido/${publicId}`);
+    const shareUrl = origin ? `${origin}/partido/${publicId}` : `/partido/${publicId}`;
+    return buildWhatsAppSummary(match, shareUrl);
   }
 
   async listNotifications(token: string, limit = 50): Promise<NotificationRecord[]> {

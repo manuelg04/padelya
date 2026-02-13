@@ -66,6 +66,7 @@ export default function MatchDetailPage() {
   const [match, setMatch] = useState<MatchView | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isMutating, setIsMutating] = useState(false);
+  const [isCancelConfirmOpen, setIsCancelConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
 
@@ -156,7 +157,18 @@ export default function MatchDetailPage() {
     }
   }
 
-  async function handleCancel() {
+  function handleOpenCancelConfirm() {
+    setIsCancelConfirmOpen(true);
+  }
+
+  function handleCloseCancelConfirm() {
+    if (isMutating) {
+      return;
+    }
+    setIsCancelConfirmOpen(false);
+  }
+
+  async function handleConfirmCancel() {
     if (!(await guardAuth()) || !token) {
       return;
     }
@@ -164,6 +176,7 @@ export default function MatchDetailPage() {
       setIsMutating(true);
       const next = await cancelMatch(publicId, token);
       setMatch(next);
+      setIsCancelConfirmOpen(false);
       setFeedback("Partido cancelado.");
       setError(null);
     } catch (nextError) {
@@ -425,7 +438,7 @@ export default function MatchDetailPage() {
                 </Button>
               ) : null}
 
-              {token && !match.canJoin && !match.canLeave && !match.isCanceled && match.status === "cerrada" ? (
+              {token && !match.isOrganizer && !match.canJoin && !match.canLeave && !match.isCanceled && match.status === "cerrada" ? (
                 <>
                   {!match.isWatchingReleaseSpot ? (
                     <Button
@@ -498,7 +511,7 @@ export default function MatchDetailPage() {
                 <Button
                   className="w-full"
                   variant="destructive"
-                  onClick={handleCancel}
+                  onClick={handleOpenCancelConfirm}
                   disabled={isMutating}
                   data-testid="cancel-btn"
                 >
@@ -509,6 +522,44 @@ export default function MatchDetailPage() {
             ) : null}
           </CardContent>
         </Card>
+      ) : null}
+
+      {isCancelConfirmOpen ? (
+        <div className="fixed inset-0 z-50 flex items-end bg-zinc-950/50 p-4 sm:items-center sm:justify-center">
+          <div
+            className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl ring-1 ring-zinc-200"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cancel-match-title"
+            aria-describedby="cancel-match-description"
+          >
+            <h3 id="cancel-match-title" className="text-lg font-semibold text-zinc-900">
+              Cancelar partido
+            </h3>
+            <p id="cancel-match-description" className="mt-2 text-sm text-zinc-600">
+              Si cancelas, el partido se cerrará para todos y dejará de aparecer como abierto.
+            </p>
+            <div className="mt-5 grid gap-2">
+              <Button
+                variant="destructive"
+                onClick={handleConfirmCancel}
+                disabled={isMutating}
+                data-testid="confirm-cancel-btn"
+              >
+                {isMutating ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {isMutating ? "Procesando..." : "Cancelar partido"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleCloseCancelConfirm}
+                disabled={isMutating}
+                data-testid="cancel-confirm-back-btn"
+              >
+                Volver
+              </Button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </AppShell>
   );
