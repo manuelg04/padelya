@@ -1,6 +1,6 @@
 import type { NotifyManyUsersInput, NotifyUserInput, UserId, WriteCtx } from "./types";
 
-export async function notifyUser(ctx: WriteCtx, input: NotifyUserInput): Promise<void> {
+export async function notifyUser(ctx: WriteCtx, input: NotifyUserInput): Promise<boolean> {
   if (input.dedupeKey) {
     const existing = await ctx.db
       .query("notifications")
@@ -10,7 +10,7 @@ export async function notifyUser(ctx: WriteCtx, input: NotifyUserInput): Promise
       .unique();
 
     if (existing) {
-      return;
+      return false;
     }
   }
 
@@ -24,17 +24,19 @@ export async function notifyUser(ctx: WriteCtx, input: NotifyUserInput): Promise
     createdAt: input.createdAt,
     dedupeKey: input.dedupeKey,
   });
+
+  return true;
 }
 
-export async function notifyManyUsers(ctx: WriteCtx, input: NotifyManyUsersInput): Promise<void> {
+export async function notifyManyUsers(ctx: WriteCtx, input: NotifyManyUsersInput): Promise<UserId[]> {
   const recipientsById = new Map<string, UserId>();
   for (const recipientUserId of input.recipientUserIds) {
     recipientsById.set(String(recipientUserId), recipientUserId);
   }
 
-  await Promise.all(
-    [...recipientsById.values()].map((recipientUserId) =>
-      notifyUser(ctx, {
+  const insertedByRecipient = await Promise.all(
+    [...recipientsById.values()].map(async (recipientUserId) => {
+      const inserted = await notifyUser(ctx, {
         recipientUserId,
         type: input.type,
         matchId: input.matchId,
@@ -43,7 +45,13 @@ export async function notifyManyUsers(ctx: WriteCtx, input: NotifyManyUsersInput
         message: input.message,
         createdAt: input.createdAt,
         dedupeKey: input.dedupeKey ? `${input.dedupeKey}:${String(recipientUserId)}` : undefined,
-      }),
-    ),
+      });
+
+      return { recipientUserId, inserted };
+    }),
   );
+
+  return insertedByRecipient
+    .filter((row) => row.inserted)
+    .map((row) => row.recipientUserId);
 }

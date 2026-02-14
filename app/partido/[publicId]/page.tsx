@@ -79,8 +79,10 @@ export default function MatchDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [returnNotice, setReturnNotice] = useState<string | null>(null);
+  const [contextNotice, setContextNotice] = useState<"release" | "canceled" | null>(null);
   const matchSnapshotRef = useRef<ReturnType<typeof toMatchReentrySnapshot> | null>(null);
   const returnNoticeTimeoutRef = useRef<number | null>(null);
+  const contextNoticeTimeoutRef = useRef<number | null>(null);
 
   const refresh = useCallback(async (options?: { returnEvent?: ReturnTriggerEvent }) => {
     if (!publicId) {
@@ -125,6 +127,9 @@ export default function MatchDetailPage() {
       if (returnNoticeTimeoutRef.current !== null) {
         window.clearTimeout(returnNoticeTimeoutRef.current);
       }
+      if (contextNoticeTimeoutRef.current !== null) {
+        window.clearTimeout(contextNoticeTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -151,17 +156,41 @@ export default function MatchDetailPage() {
 
   useEffect(() => {
     if (rawPublicId && publicId && rawPublicId !== publicId) {
-      router.replace(`/partido/${publicId}`);
+      const query = searchParams.toString();
+      router.replace(`/partido/${publicId}${query ? `?${query}` : ""}`);
     }
-  }, [publicId, rawPublicId, router]);
+  }, [publicId, rawPublicId, router, searchParams]);
+
+  const noticeParam = searchParams.get("notice");
+  const wantsJoinCta = searchParams.get("cta") === "join";
+  const isReleaseContext = noticeParam === "release";
+
+  useEffect(() => {
+    if (noticeParam !== "release" && noticeParam !== "canceled") {
+      return;
+    }
+
+    setContextNotice(noticeParam);
+    if (contextNoticeTimeoutRef.current !== null) {
+      window.clearTimeout(contextNoticeTimeoutRef.current);
+    }
+    contextNoticeTimeoutRef.current = window.setTimeout(() => {
+      setContextNotice(null);
+    }, NEW_BADGE_TTL_MS);
+  }, [noticeParam]);
+
+  const pathWithQuery = useMemo(() => {
+    const query = searchParams.toString();
+    return query ? `${pathname}?${query}` : pathname;
+  }, [pathname, searchParams]);
 
   async function guardAuth(): Promise<boolean> {
     if (!token) {
-      router.push(`/login?redirect=${encodeURIComponent(pathname)}`);
+      router.push(`/login?redirect=${encodeURIComponent(pathWithQuery)}`);
       return false;
     }
     if (!loading && user && !user.alias) {
-      router.push(`/perfil?redirect=${encodeURIComponent(pathname)}`);
+      router.push(`/perfil?redirect=${encodeURIComponent(pathWithQuery)}`);
       return false;
     }
     return true;
@@ -180,7 +209,7 @@ export default function MatchDetailPage() {
       setError(null);
     } catch (nextError) {
       if (isAliasRequired(nextError)) {
-        router.push(`/perfil?redirect=${encodeURIComponent(pathname)}`);
+        router.push(`/perfil?redirect=${encodeURIComponent(pathWithQuery)}`);
         return;
       }
       setError(toErrorMessage(nextError));
@@ -269,7 +298,20 @@ export default function MatchDetailPage() {
   const dateTime = useMemo(() => (match ? utcIsoToBogotaParts(match.startsAtUtc) : null), [match]);
 
   const emptySlots = match ? MAX_PLAYERS - match.participants.length : 0;
-  const wantsJoinCta = searchParams.get("cta") === "join";
+  const hasAvailableSpot = Boolean(
+    match && !match.isCanceled && match.status === "abierta" && match.participants.length < MAX_PLAYERS,
+  );
+  const shouldShowReleaseRewatchCta = wantsJoinCta && isReleaseContext && !hasAvailableSpot;
+  const shouldShowReleaseMissedBanner =
+    contextNotice === "release" && match && !hasAvailableSpot && !match.isCanceled;
+  const contextNoticeLabel =
+    contextNotice === "release"
+      ? shouldShowReleaseMissedBanner
+        ? "Se ocupó el cupo antes de que llegaras"
+        : "Se liberó 1 cupo"
+      : contextNotice === "canceled"
+        ? "Partido cancelado"
+        : null;
 
   async function handleRetry() {
     if (!(await guardAuth()) || !token || !match) {
@@ -349,6 +391,11 @@ export default function MatchDetailPage() {
         <div className="mb-4 flex items-start gap-2 rounded-xl bg-sky-50 p-3.5 text-sm text-sky-700 ring-1 ring-inset ring-sky-200">
           <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{returnNotice}</span>
+        </div>
+      ) : null}
+      {contextNoticeLabel ? (
+        <div className="fixed left-1/2 top-[calc(0.75rem+env(safe-area-inset-top))] z-40 w-[min(92vw,26rem)] -translate-x-1/2 rounded-xl bg-zinc-900/95 px-4 py-3 text-sm font-medium text-white shadow-lg">
+          {contextNoticeLabel}
         </div>
       ) : null}
 
@@ -499,15 +546,21 @@ export default function MatchDetailPage() {
               </div>
             ) : null}
 
-            {wantsJoinCta && !match.isCanceled && match.status === "cerrada" ? (
+            {wantsJoinCta && !match.isCanceled && !hasAvailableSpot ? (
               <div className="flex items-start gap-2 rounded-xl bg-zinc-50 px-3.5 py-3 text-sm text-zinc-700 ring-1 ring-inset ring-zinc-200">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" />
-                <span>El cupo pudo haberse tomado. Si vuelve a abrirse, activa el aviso.</span>
+                <span>Se ocupó el cupo antes de que llegaras</span>
               </div>
             ) : null}
 
             {/* Primary CTA */}
             <div className="space-y-2.5">
+              {contextNotice === "canceled" ? (
+                <Button className="w-full" size="lg" variant="outline" disabled>
+                  Ver detalles
+                </Button>
+              ) : null}
+
               {match.canJoin ? (
                 <Button className="w-full" size="lg" onClick={handleJoin} disabled={isMutating} data-testid="join-btn">
                   {isMutating ? (
@@ -515,7 +568,11 @@ export default function MatchDetailPage() {
                   ) : (
                     <UserPlus className="h-4 w-4" />
                   )}
-                  {isMutating ? "Procesando..." : "Unirme al partido"}
+                  {isMutating
+                    ? "Procesando..."
+                    : wantsJoinCta && isReleaseContext
+                      ? "Unirme ahora"
+                      : "Unirme al partido"}
                 </Button>
               ) : null}
 
@@ -545,7 +602,11 @@ export default function MatchDetailPage() {
                       ) : (
                         <Bell className="h-4 w-4" />
                       )}
-                      {isMutating ? "Procesando..." : "Avisarme si se libera un cupo"}
+                      {isMutating
+                        ? "Procesando..."
+                        : shouldShowReleaseRewatchCta
+                          ? "Avisarme si se libera otro cupo"
+                          : "Avisarme si se libera un cupo"}
                     </Button>
                   ) : (
                     <div className="space-y-2">
@@ -574,9 +635,13 @@ export default function MatchDetailPage() {
 
               {!token && !match.isCanceled && match.status !== "no_se_armo" ? (
                 <Button className="w-full" size="lg" asChild>
-                  <Link href={`/login?redirect=${encodeURIComponent(pathname)}`}>
+                  <Link href={`/login?redirect=${encodeURIComponent(pathWithQuery)}`}>
                     <LogIn className="h-4 w-4" />
-                    Inicia sesión para participar
+                    {shouldShowReleaseRewatchCta
+                      ? "Avisarme si se libera otro cupo"
+                      : wantsJoinCta && isReleaseContext && hasAvailableSpot
+                      ? "Inicia sesión para unirte"
+                      : "Inicia sesión para participar"}
                   </Link>
                 </Button>
               ) : null}

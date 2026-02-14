@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { formatJoinPushBody, resolveJoinPushRecipientUserIds } from "@/convex/padel/push_message";
+import {
+  formatJoinPushBody,
+  formatReleaseSpotPushBody,
+  resolveJoinPushRecipientUserIds,
+} from "@/convex/padel/push_message";
 
 describe("push message formatting", () => {
   it("formats join push body with Hoy label", () => {
@@ -34,6 +38,16 @@ describe("push message formatting", () => {
     });
 
     expect(body).toBe("Ana se unió a Padel Norte · 17/02/2026 15:00");
+  });
+
+  it("formats release push body", () => {
+    const body = formatReleaseSpotPushBody({
+      club: "Padel Norte",
+      startsAtUtc: "2026-02-14T20:00:00.000Z",
+      referenceNowUtc: "2026-02-14T12:00:00.000Z",
+    });
+
+    expect(body).toBe("Ahora hay cupo en Padel Norte · Hoy 15:00");
   });
 
   it("excludes joiner and deduplicates recipients", () => {

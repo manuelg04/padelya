@@ -56,6 +56,16 @@ export function formatJoinPushBody(input: {
   return `${alias} se unió a ${input.club} · ${dateLabel} ${timeLabel}`;
 }
 
+export function formatReleaseSpotPushBody(input: {
+  club: string;
+  startsAtUtc: string;
+  referenceNowUtc?: string;
+}): string {
+  const dateLabel = getBogotaDateLabel(input.startsAtUtc, input.referenceNowUtc);
+  const timeLabel = getBogotaTimeLabel(input.startsAtUtc);
+  return `Ahora hay cupo en ${input.club} · ${dateLabel} ${timeLabel}`;
+}
+
 export function resolveJoinPushRecipientUserIds<UserIdType>(
   participantUserIds: UserIdType[],
   joinerUserId: UserIdType,

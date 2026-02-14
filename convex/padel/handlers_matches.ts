@@ -266,7 +266,7 @@ export async function joinHandler(ctx: WriteCtx, args: PublicIdActorArgs): Promi
   await removeMatchWatcher(ctx, match._id, user._id);
 
   const currentParticipantUserIds = participantsBefore.map((participant) => participant.userId);
-  await notifyManyUsers(ctx, {
+  const insertedJoinNotificationRecipientUserIds = await notifyManyUsers(ctx, {
     recipientUserIds: currentParticipantUserIds,
     type: "PARTICIPANTE_SE_UNIO",
     matchId: match._id,
@@ -282,7 +282,7 @@ export async function joinHandler(ctx: WriteCtx, args: PublicIdActorArgs): Promi
     }),
   });
 
-  const pushRecipientUserIds = resolveJoinPushRecipientUserIds(currentParticipantUserIds, user._id);
+  const pushRecipientUserIds = resolveJoinPushRecipientUserIds(insertedJoinNotificationRecipientUserIds, user._id);
   if (pushRecipientUserIds.length > 0) {
     await ctx.scheduler.runAfter(0, internal.push_actions.sendJoinPush, {
       recipientUserIds: pushRecipientUserIds,
@@ -377,7 +377,7 @@ export async function leaveHandler(ctx: WriteCtx, args: PublicIdActorArgs): Prom
       now,
     });
 
-    await notifyManyUsers(ctx, {
+    const insertedReleaseRecipientUserIds = await notifyManyUsers(ctx, {
       recipientUserIds: watcherUserIds,
       type: "CUPO_LIBERADO",
       matchId: match._id,
@@ -387,6 +387,16 @@ export async function leaveHandler(ctx: WriteCtx, args: PublicIdActorArgs): Prom
       createdAt: now,
       dedupeKey: `release:${String(match._id)}`,
     });
+
+    if (insertedReleaseRecipientUserIds.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.push_actions.sendReleaseSpotPush, {
+        recipientUserIds: insertedReleaseRecipientUserIds,
+        club: match.club,
+        startsAtUtc: match.startsAtUtc,
+        matchPublicId: match.publicId,
+        eventAt: now,
+      });
+    }
   }
 
   await logEvent(ctx, {
@@ -434,6 +444,15 @@ export async function cancelHandler(ctx: WriteCtx, args: PublicIdActorArgs): Pro
       message: `El partido en ${match.club} fue cancelado.`,
       createdAt: now,
       dedupeKey: `cancel:${String(match._id)}`,
+    });
+
+    const pushRecipientUserIds = new Set(participantUserIds);
+    pushRecipientUserIds.add(match.organizerUserId);
+    await ctx.scheduler.runAfter(0, internal.push_actions.sendMatchCanceledPush, {
+      recipientUserIds: [...pushRecipientUserIds],
+      club: match.club,
+      matchPublicId: match.publicId,
+      eventAt: now,
     });
 
     await removeAllWatchersForMatch(ctx, match._id);
