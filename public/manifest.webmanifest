@@ -1,6 +1,6 @@
 {
-  "name": "Padel por Link",
-  "short_name": "PadelLink",
+  "name": "PadelYA",
+  "short_name": "PadelYA",
   "description": "Organiza partidos de pádel por link y compártelos en WhatsApp.",
   "display": "standalone",
   "start_url": "/",
