@@ -10,12 +10,12 @@ const geist = Geist({
 });
 
 export const metadata: Metadata = {
-  title: "Padel por Link",
-  description: "Organiza partidos de pádel por link para WhatsApp.",
+  title: "PadelYA",
+  description: "Cupos y confirmados en tiempo real, por enlace.",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
-    title: "Padel por Link",
+    title: "PadelYA",
     statusBarStyle: "default",
   },
   icons: {

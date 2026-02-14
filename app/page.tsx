@@ -393,12 +393,13 @@ export default function HomePage() {
               <Zap className="h-5 w-5 text-emerald-600" />
             </div>
             <div className="min-w-0">
-              <h1 className="text-lg font-bold tracking-tight text-emerald-900">
-                Partidos por link, sin caos en WhatsApp
+              <h1 className="text-lg font-bold leading-tight tracking-tight text-emerald-900 sm:text-xl">
+                Cupos en tiempo real, sin estar pendiente
               </h1>
               <p className="mt-1 text-sm leading-relaxed text-emerald-700/80">
-                Crea un partido en segundos, comparte el link y mantén los cupos actualizados en tiempo real.
+                Comparte el enlace y listo: todos ven cupos y confirmados actualizados al instante.
               </p>
+              <p className="mt-1 text-xs font-medium tracking-wide text-emerald-700/70">PadelYA · BGA</p>
             </div>
           </div>
           <div className="mt-4 flex flex-col gap-2 sm:flex-row">

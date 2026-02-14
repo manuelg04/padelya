@@ -28,7 +28,7 @@ export function AppHeader() {
     <header className="sticky top-0 z-10 border-b border-zinc-200/80 bg-white/90 backdrop-blur-md">
       <div className="mx-auto flex w-full max-w-xl items-center justify-between px-4 py-3.5">
         <Link href="/" className="text-base font-bold tracking-tight text-zinc-900">
-          🎾 Padel por Link
+          🎾 PadelYA
         </Link>
         <div className="flex items-center gap-2.5">
           {user ? (
