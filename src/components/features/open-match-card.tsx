@@ -7,6 +7,7 @@ import { Button } from "@/src/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/src/components/ui/card";
 import { formatFeedSchedule } from "@/src/domain/match";
 import { MAX_PLAYERS, type MatchView, type Modality } from "@/src/domain/types";
+import { cn } from "@/src/lib/utils";
 
 const MODALITY_LABEL: Record<Modality, string> = {
   mixto: "Mixto",
@@ -14,16 +15,36 @@ const MODALITY_LABEL: Record<Modality, string> = {
   fem: "Fem",
 };
 
-export const OpenMatchCard = memo(function OpenMatchCard({ match }: { match: MatchView }) {
+type OpenMatchCardProps = {
+  match: MatchView;
+  isNew?: boolean;
+  isHighlighted?: boolean;
+};
+
+export const OpenMatchCard = memo(function OpenMatchCard({
+  match,
+  isNew = false,
+  isHighlighted = false,
+}: OpenMatchCardProps) {
   const schedule = formatFeedSchedule(match.startsAtUtc);
   const participantCount = match.participants.length;
 
   return (
-    <Card data-testid={`open-match-card-${match.publicId}`}>
+    <Card
+      data-testid={`open-match-card-${match.publicId}`}
+      className={cn(isHighlighted && "ring-2 ring-emerald-300/80 bg-emerald-50/50")}
+    >
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between gap-3">
           <CardTitle className="text-base">{match.club}</CardTitle>
-          <Badge variant="neutral">{MODALITY_LABEL[match.modality]}</Badge>
+          <div className="flex items-center gap-1.5">
+            {isNew ? (
+              <Badge variant="success" data-testid={`new-badge-${match.publicId}`}>
+                Nuevo
+              </Badge>
+            ) : null}
+            <Badge variant="neutral">{MODALITY_LABEL[match.modality]}</Badge>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3 text-sm text-zinc-600">

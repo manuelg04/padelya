@@ -11,13 +11,34 @@ import { AppShell } from "@/src/components/layout/app-shell";
 import { Button } from "@/src/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/src/components/ui/card";
 import { Skeleton } from "@/src/components/ui/skeleton";
-import { groupMatchesByDay } from "@/src/domain/match";
+import { formatFeedSchedule, groupMatchesByDay } from "@/src/domain/match";
+import {
+  NEW_BADGE_TTL_MS,
+  computeFeedReturnDiff,
+  countStrictUpdatedMatches,
+  getNextUpcomingMatch,
+  isRelevantMatch,
+  isWithinHours,
+  shouldShowFeedReturnBanner,
+  toMatchReentrySnapshot,
+  toMatchReentrySnapshotMap,
+  type MatchReentrySnapshot,
+  type MatchReentrySnapshotMap,
+  type ReturnTriggerEvent,
+} from "@/src/domain/reentry";
 import type { MatchView, Modality, OpenFeedWindow } from "@/src/domain/types";
-import { listMatches } from "@/src/lib/api/client";
+import { getMatch, listMatches } from "@/src/lib/api/client";
+import { useReturnTrigger } from "@/src/lib/use-return-trigger";
 import { cn, toErrorMessage } from "@/src/lib/utils";
 
 type HomeTab = "inicio" | "mis";
 type FeedModalityFilter = "all" | Modality;
+
+type FeedReturnBannerState = {
+  newCount: number;
+  updatedCount: number;
+  newIds: string[];
+};
 
 const FEED_PAGE_SIZE = 15;
 const FEED_STORAGE_KEY = "feed-state";
@@ -82,11 +103,21 @@ function writeCachedFeedState(state: FeedCacheState) {
   }
 }
 
+function matchesText(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 export default function HomePage() {
   const { loading, token, user } = useAuth();
 
   const didInitializeFiltersRef = useRef(false);
   const pendingScrollRef = useRef<number | null>(null);
+  const pendingReturnEventRef = useRef<ReturnTriggerEvent | null>(null);
+  const feedSnapshotRef = useRef<MatchReentrySnapshotMap>(new Map());
+  const mineSnapshotRef = useRef<MatchReentrySnapshotMap>(new Map());
+  const hasFeedSnapshotRef = useRef(false);
+  const hasMineSnapshotRef = useRef(false);
+  const newBadgeTimeoutRef = useRef<number | null>(null);
 
   const [cacheHydrated, setCacheHydrated] = useState(false);
   const [tab, setTab] = useState<HomeTab>("inicio");
@@ -96,6 +127,10 @@ export default function HomePage() {
   const [matches, setMatches] = useState<MatchView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [returnRefreshTick, setReturnRefreshTick] = useState(0);
+  const [feedReturnBanner, setFeedReturnBanner] = useState<FeedReturnBannerState | null>(null);
+  const [newBadgeIds, setNewBadgeIds] = useState<string[]>([]);
+  const [mineUpdatedCount, setMineUpdatedCount] = useState(0);
 
   useEffect(() => {
     const cached = readCachedFeedState();
@@ -111,6 +146,14 @@ export default function HomePage() {
     setCacheHydrated(true);
   }, []);
 
+  useReturnTrigger(
+    useCallback((event: ReturnTriggerEvent) => {
+      pendingReturnEventRef.current = event;
+      setReturnRefreshTick((prev) => prev + 1);
+    }, []),
+    { enabled: cacheHydrated },
+  );
+
   const mineToken = tab === "mis" ? token : null;
 
   useEffect(() => {
@@ -119,6 +162,9 @@ export default function HomePage() {
     }
 
     let disposed = false;
+    const returnEvent = pendingReturnEventRef.current;
+    const isReturnCheck = Boolean(returnEvent);
+    pendingReturnEventRef.current = null;
 
     void (async () => {
       try {
@@ -130,10 +176,25 @@ export default function HomePage() {
             setMatches([]);
             return;
           }
+
           const myMatches = await listMatches({ token: mineToken, mine: true });
-          if (!disposed) {
-            setMatches(myMatches);
+          if (disposed) {
+            return;
           }
+
+          const nextSnapshots = toMatchReentrySnapshotMap(myMatches);
+          if (isReturnCheck) {
+            if (hasMineSnapshotRef.current) {
+              const updatedCount = countStrictUpdatedMatches(mineSnapshotRef.current, nextSnapshots);
+              setMineUpdatedCount(updatedCount);
+            } else {
+              setMineUpdatedCount(0);
+            }
+          }
+
+          mineSnapshotRef.current = nextSnapshots;
+          hasMineSnapshotRef.current = true;
+          setMatches(myMatches);
           return;
         }
 
@@ -142,9 +203,99 @@ export default function HomePage() {
           modality: feedModality === "all" ? undefined : feedModality,
           window: feedWindow,
         });
-        if (!disposed) {
-          setMatches(openMatches);
+        if (disposed) {
+          return;
         }
+
+        const nextSnapshots = toMatchReentrySnapshotMap(openMatches);
+
+        if (isReturnCheck && hasFeedSnapshotRef.current && returnEvent) {
+          const previousSnapshots = feedSnapshotRef.current;
+          const diff = computeFeedReturnDiff(previousSnapshots, nextSnapshots);
+
+          const updatedSnapshotsById = new Map<string, MatchReentrySnapshot>();
+          for (const publicId of diff.updatedIds) {
+            const snapshot = nextSnapshots.get(publicId);
+            if (snapshot) {
+              updatedSnapshotsById.set(publicId, snapshot);
+            }
+          }
+
+          if (diff.missingIds.length > 0) {
+            const missingChecks = await Promise.all(
+              diff.missingIds.map(async (publicId) => {
+                try {
+                  const latestMatch = await getMatch(publicId, token ?? undefined);
+                  return { publicId, latestSnapshot: toMatchReentrySnapshot(latestMatch) };
+                } catch {
+                  return null;
+                }
+              }),
+            );
+
+            if (disposed) {
+              return;
+            }
+
+            for (const item of missingChecks) {
+              if (!item) {
+                continue;
+              }
+
+              const previousSnapshot = previousSnapshots.get(item.publicId);
+              if (!previousSnapshot) {
+                continue;
+              }
+
+              if (
+                previousSnapshot.status !== item.latestSnapshot.status ||
+                previousSnapshot.participantCount !== item.latestSnapshot.participantCount
+              ) {
+                updatedSnapshotsById.set(item.publicId, item.latestSnapshot);
+              }
+            }
+          }
+
+          const relevantIds = new Set<string>();
+          for (const publicId of diff.newIds) {
+            const snapshot = nextSnapshots.get(publicId);
+            if (!snapshot) {
+              continue;
+            }
+
+            if (isRelevantMatch(snapshot, { now: new Date(), currentUserId: user?.id ?? null })) {
+              relevantIds.add(publicId);
+            }
+          }
+
+          for (const [publicId, snapshot] of updatedSnapshotsById) {
+            if (isRelevantMatch(snapshot, { now: new Date(), currentUserId: user?.id ?? null })) {
+              relevantIds.add(publicId);
+            }
+          }
+
+          const shouldShow = shouldShowFeedReturnBanner({
+            awayMs: returnEvent.awayMs,
+            newCount: diff.newIds.length,
+            relevantCount: relevantIds.size,
+            totalCount: diff.newIds.length + updatedSnapshotsById.size,
+          });
+
+          const updatedCount = updatedSnapshotsById.size;
+          if (shouldShow && (diff.newIds.length > 0 || updatedCount > 0)) {
+            setFeedReturnBanner({
+              newCount: diff.newIds.length,
+              updatedCount,
+              newIds: diff.newIds,
+            });
+          } else {
+            setFeedReturnBanner(null);
+          }
+        }
+
+        feedSnapshotRef.current = nextSnapshots;
+        hasFeedSnapshotRef.current = true;
+        setMatches(openMatches);
       } catch (nextError) {
         if (!disposed) {
           setError(toErrorMessage(nextError));
@@ -167,7 +318,7 @@ export default function HomePage() {
     return () => {
       disposed = true;
     };
-  }, [cacheHydrated, tab, mineToken, feedModality, feedWindow]);
+  }, [cacheHydrated, tab, mineToken, feedModality, feedWindow, returnRefreshTick, token, user?.id]);
 
   useEffect(() => {
     if (!cacheHydrated) {
@@ -179,6 +330,14 @@ export default function HomePage() {
     }
     setVisibleCount(FEED_PAGE_SIZE);
   }, [cacheHydrated, feedModality, feedWindow]);
+
+  useEffect(() => {
+    return () => {
+      if (newBadgeTimeoutRef.current !== null) {
+        window.clearTimeout(newBadgeTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const saveFeedState = useCallback(() => {
     writeCachedFeedState({
@@ -207,6 +366,20 @@ export default function HomePage() {
     () => (tab === "inicio" ? groupMatchesByDay(visibleMatches) : []),
     [tab, visibleMatches],
   );
+
+  const nextMineMatch = useMemo(() => (tab === "mis" ? getNextUpcomingMatch(matches) : null), [tab, matches]);
+
+  const nextMineMatchSchedule = useMemo(
+    () => (nextMineMatch ? formatFeedSchedule(nextMineMatch.startsAtUtc) : null),
+    [nextMineMatch],
+  );
+
+  const isNextMineMatchUrgent = useMemo(
+    () => (nextMineMatch ? isWithinHours(nextMineMatch.startsAtUtc, 24) : false),
+    [nextMineMatch],
+  );
+
+  const activeNewBadgeIds = useMemo(() => new Set(newBadgeIds), [newBadgeIds]);
 
   const hasMore = tab === "inicio" && visibleCount < matches.length;
   const hasActiveFilters = feedModality !== "all" || feedWindow !== "next7";
@@ -299,6 +472,75 @@ export default function HomePage() {
           </div>
         ) : null}
 
+        {tab === "inicio" && feedReturnBanner ? (
+          <Card data-testid="feed-return-banner" className="border-emerald-200 bg-emerald-50/70">
+            <CardContent className="flex items-center justify-between gap-3 p-4">
+              <div className="space-y-1 text-sm text-emerald-900">
+                {feedReturnBanner.newCount > 0 ? (
+                  <p>
+                    Hay {matchesText(feedReturnBanner.newCount, "partido nuevo", "partidos nuevos")}
+                  </p>
+                ) : null}
+                {feedReturnBanner.updatedCount > 0 ? (
+                  <p>
+                    Se actualizaron {matchesText(feedReturnBanner.updatedCount, "partido", "partidos")}
+                  </p>
+                ) : null}
+              </div>
+              <Button
+                size="sm"
+                data-testid="feed-return-view-btn"
+                onClick={() => {
+                  window.scrollTo({ top: 0, behavior: "smooth" });
+                  setNewBadgeIds(feedReturnBanner.newIds);
+                  if (newBadgeTimeoutRef.current !== null) {
+                    window.clearTimeout(newBadgeTimeoutRef.current);
+                  }
+                  newBadgeTimeoutRef.current = window.setTimeout(() => {
+                    setNewBadgeIds([]);
+                  }, NEW_BADGE_TTL_MS);
+                  setFeedReturnBanner(null);
+                }}
+              >
+                Ver
+              </Button>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {tab === "mis" && nextMineMatch ? (
+          <Card
+            data-testid="mine-next-match-block"
+            className={cn(isNextMineMatchUrgent && "border-amber-200 bg-amber-50/40")}
+          >
+            <CardHeader className="pb-2">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle className="text-base">Próximo partido</CardTitle>
+                  <CardDescription>{nextMineMatch.club}</CardDescription>
+                </div>
+                {mineUpdatedCount > 0 ? (
+                  <span
+                    data-testid="mine-updated-indicator"
+                    className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700"
+                  >
+                    Actualizado · {mineUpdatedCount}
+                  </span>
+                ) : null}
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0 text-sm text-zinc-600">
+              <p>{nextMineMatchSchedule}</p>
+              <p className="mt-1">
+                Cupos: {nextMineMatch.participants.length}/4
+              </p>
+              {isNextMineMatchUrgent ? (
+                <p className="mt-1 text-xs font-semibold text-amber-700">Empieza en menos de 24h</p>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
+
         {tab === "mis" && !loading && !user ? (
           <Card>
             <CardHeader className="items-center text-center">
@@ -383,21 +625,21 @@ export default function HomePage() {
           <div className="space-y-5">
             {dayGroups.map((group) => (
               <div key={group.dateKey} className="space-y-3">
-                <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
-                  {group.label}
-                </h3>
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">{group.label}</h3>
                 {group.matches.map((match) => (
-                  <OpenMatchCard key={match.publicId} match={match} />
+                  <OpenMatchCard
+                    key={match.publicId}
+                    match={match}
+                    isNew={activeNewBadgeIds.has(match.publicId)}
+                    isHighlighted={activeNewBadgeIds.has(match.publicId)}
+                  />
                 ))}
               </div>
             ))}
 
             {hasMore ? (
               <div className="flex justify-center pt-2">
-                <Button
-                  variant="outline"
-                  onClick={() => setVisibleCount((prev) => prev + FEED_PAGE_SIZE)}
-                >
+                <Button variant="outline" onClick={() => setVisibleCount((prev) => prev + FEED_PAGE_SIZE)}>
                   Cargar más
                 </Button>
               </div>

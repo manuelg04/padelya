@@ -428,3 +428,86 @@ test("security: watch and notifications endpoints require auth", async ({ reques
   const watchBody = (await watchResponse.json()) as { error?: { code?: string } };
   expect(watchBody.error?.code).toBe("UNAUTHORIZED");
 });
+
+test("feed: no muestra banner por cambio de tab interno", async ({ page, request }) => {
+  const now = Date.now();
+  const organizer = await createApiUser(request, "3010000001", "Internal Tab Org");
+  await createApiMatch(request, organizer, {
+    club: "Feed Base Club",
+    startsAtLocal: toBogotaDateTimeLocal(new Date(now + 2 * 24 * 60 * 60 * 1000)),
+    category: "4ta",
+    modality: "mixto",
+  });
+
+  await page.goto("/");
+  await expect(page.getByText("Feed Base Club")).toBeVisible();
+  await expect(page.getByTestId("feed-return-banner")).toHaveCount(0);
+
+  await createApiMatch(request, organizer, {
+    club: "Feed Nuevo Interno",
+    startsAtLocal: toBogotaDateTimeLocal(new Date(now + 2 * 24 * 60 * 60 * 1000 + 60 * 60 * 1000)),
+    category: "4ta",
+    modality: "mixto",
+  });
+
+  await page.getByRole("button", { name: "Mis partidos" }).click();
+  await page.getByRole("button", { name: "Inicio" }).click();
+
+  await expect(page.getByText("Feed Nuevo Interno")).toBeVisible();
+  await expect(page.getByTestId("feed-return-banner")).toHaveCount(0);
+});
+
+test("feed: online dispara return, muestra banner y badge Nuevo por 5s", async ({ page, request }) => {
+  const now = Date.now();
+  const organizer = await createApiUser(request, "3010000002", "Online Trigger Org");
+  await createApiMatch(request, organizer, {
+    club: "Feed Online Base",
+    startsAtLocal: toBogotaDateTimeLocal(new Date(now + 2 * 24 * 60 * 60 * 1000)),
+    category: "4ta",
+    modality: "mixto",
+  });
+
+  await page.goto("/");
+  await expect(page.getByText("Feed Online Base")).toBeVisible();
+
+  await page.context().setOffline(true);
+  const created = await createApiMatch(request, organizer, {
+    club: "Feed Online Nuevo",
+    startsAtLocal: toBogotaDateTimeLocal(new Date(now + 2 * 60 * 60 * 1000)),
+    category: "4ta",
+    modality: "mixto",
+  });
+  await page.context().setOffline(false);
+
+  await expect(page.getByTestId("feed-return-banner")).toBeVisible();
+  await expect(page.getByText("Hay 1 partido nuevo")).toBeVisible();
+  await page.getByTestId("feed-return-view-btn").click();
+
+  await expect(page.getByTestId(`new-badge-${created.publicId}`)).toBeVisible();
+  await page.waitForTimeout(5100);
+  await expect(page.getByTestId(`new-badge-${created.publicId}`)).toHaveCount(0);
+});
+
+test("mis partidos: muestra próximo y actualizado al volver online", async ({ page, request }) => {
+  const now = Date.now();
+  const organizerPhone = "3010000003";
+  const organizer = await createApiUser(request, organizerPhone, "Mis Org");
+  const match = await createApiMatch(request, organizer, {
+    club: "Mis Proximo Club",
+    startsAtLocal: toBogotaDateTimeLocal(new Date(now + 2 * 60 * 60 * 1000)),
+    category: "4ta",
+    modality: "mixto",
+  });
+  const joiner = await createApiUser(request, "3010000004", "Mis Joiner");
+
+  await completeAuth(page, organizerPhone, "Mis Org", "/");
+  await page.getByRole("button", { name: "Mis partidos" }).click();
+  await expect(page.getByTestId("mine-next-match-block")).toBeVisible();
+
+  await page.context().setOffline(true);
+  await joinApiMatch(request, joiner, match.publicId);
+  await page.context().setOffline(false);
+
+  await expect(page.getByTestId("mine-updated-indicator")).toBeVisible();
+  await expect(page.getByTestId("mine-updated-indicator")).toContainText("Actualizado · 1");
+});

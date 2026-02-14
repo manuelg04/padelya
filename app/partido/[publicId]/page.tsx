@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Bell,
@@ -32,6 +32,12 @@ import { Separator } from "@/src/components/ui/separator";
 import { Skeleton } from "@/src/components/ui/skeleton";
 import { MAX_PLAYERS } from "@/src/domain/types";
 import { suggestRetryStartsAtLocal, utcIsoToBogotaParts } from "@/src/domain/match";
+import {
+  NEW_BADGE_TTL_MS,
+  resolveDetailReturnNotice,
+  toMatchReentrySnapshot,
+  type ReturnTriggerEvent,
+} from "@/src/domain/reentry";
 import type { MatchView } from "@/src/domain/types";
 import {
   cancelMatch,
@@ -46,6 +52,7 @@ import {
 } from "@/src/lib/api/client";
 import { getAvatarInitials } from "@/src/lib/avatar";
 import { normalizePublicId } from "@/src/lib/public-id";
+import { useReturnTrigger } from "@/src/lib/use-return-trigger";
 import { cn, toErrorMessage } from "@/src/lib/utils";
 
 function isAliasRequired(error: unknown): boolean {
@@ -71,15 +78,36 @@ export default function MatchDetailPage() {
   const [isCancelConfirmOpen, setIsCancelConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [returnNotice, setReturnNotice] = useState<string | null>(null);
+  const matchSnapshotRef = useRef<ReturnType<typeof toMatchReentrySnapshot> | null>(null);
+  const returnNoticeTimeoutRef = useRef<number | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (options?: { returnEvent?: ReturnTriggerEvent }) => {
     if (!publicId) {
       return;
     }
+
+    const previousSnapshot = matchSnapshotRef.current;
+
     try {
       setIsLoading(true);
       const next = await getMatch(publicId, token ?? undefined);
       setMatch(next);
+      const nextSnapshot = toMatchReentrySnapshot(next);
+      matchSnapshotRef.current = nextSnapshot;
+
+      if (options?.returnEvent && previousSnapshot) {
+        const notice = resolveDetailReturnNotice(previousSnapshot, nextSnapshot);
+        if (notice) {
+          setReturnNotice(notice);
+          if (returnNoticeTimeoutRef.current !== null) {
+            window.clearTimeout(returnNoticeTimeoutRef.current);
+          }
+          returnNoticeTimeoutRef.current = window.setTimeout(() => {
+            setReturnNotice(null);
+          }, NEW_BADGE_TTL_MS);
+        }
+      }
       setError(null);
     } catch (nextError) {
       setError(toErrorMessage(nextError));
@@ -91,6 +119,24 @@ export default function MatchDetailPage() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    return () => {
+      if (returnNoticeTimeoutRef.current !== null) {
+        window.clearTimeout(returnNoticeTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useReturnTrigger(
+    useCallback(
+      (event: ReturnTriggerEvent) => {
+        void refresh({ returnEvent: event });
+      },
+      [refresh],
+    ),
+    { enabled: Boolean(publicId) },
+  );
 
   useEffect(() => {
     if (!publicId) {
@@ -129,6 +175,7 @@ export default function MatchDetailPage() {
       setIsMutating(true);
       const next = await joinMatch(publicId, token);
       setMatch(next);
+      matchSnapshotRef.current = toMatchReentrySnapshot(next);
       setFeedback("Te uniste al partido.");
       setError(null);
     } catch (nextError) {
@@ -150,6 +197,7 @@ export default function MatchDetailPage() {
       setIsMutating(true);
       const next = await leaveMatch(publicId, token);
       setMatch(next);
+      matchSnapshotRef.current = toMatchReentrySnapshot(next);
       setFeedback("Saliste del partido.");
       setError(null);
     } catch (nextError) {
@@ -178,6 +226,7 @@ export default function MatchDetailPage() {
       setIsMutating(true);
       const next = await cancelMatch(publicId, token);
       setMatch(next);
+      matchSnapshotRef.current = toMatchReentrySnapshot(next);
       setIsCancelConfirmOpen(false);
       setFeedback("Partido cancelado.");
       setError(null);
@@ -253,6 +302,7 @@ export default function MatchDetailPage() {
       setIsMutating(true);
       const next = await followMatchWatch(publicId, token);
       setMatch(next);
+      matchSnapshotRef.current = toMatchReentrySnapshot(next);
       setFeedback("Te avisaremos si se libera un cupo.");
       setError(null);
     } catch (nextError) {
@@ -270,6 +320,7 @@ export default function MatchDetailPage() {
       setIsMutating(true);
       const next = await unfollowMatchWatch(publicId, token);
       setMatch(next);
+      matchSnapshotRef.current = toMatchReentrySnapshot(next);
       setFeedback("Dejaste de seguir este partido.");
       setError(null);
     } catch (nextError) {
@@ -292,6 +343,12 @@ export default function MatchDetailPage() {
         <div className="mb-4 flex items-start gap-2 rounded-xl bg-emerald-50 p-3.5 text-sm text-emerald-700 ring-1 ring-inset ring-emerald-200">
           <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{feedback}</span>
+        </div>
+      ) : null}
+      {returnNotice ? (
+        <div className="mb-4 flex items-start gap-2 rounded-xl bg-sky-50 p-3.5 text-sm text-sky-700 ring-1 ring-inset ring-sky-200">
+          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{returnNotice}</span>
         </div>
       ) : null}
 
