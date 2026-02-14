@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 
-import { mutation, query } from "./_generated/server";
+import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import {
   cancelHandler,
   createMatchHandler,
@@ -20,6 +20,13 @@ import {
   markNotificationReadHandler,
   unreadNotificationsCountHandler,
 } from "./padel/handlers_notifications";
+import {
+  disablePushSubscriptionByEndpointHandler,
+  getPushSubscriptionStateForActorHandler,
+  listActivePushSubscriptionsForRecipientsHandler,
+  removePushSubscriptionForActorHandler,
+  upsertPushSubscriptionForActorHandler,
+} from "./padel/handlers_push";
 import {
   generateAvatarUploadUrlHandler,
   removeMyAvatarHandler,
@@ -171,4 +178,50 @@ export const markNotificationRead = mutation({
 export const markAllNotificationsRead = mutation({
   args: {},
   handler: (ctx) => markAllNotificationsReadHandler(ctx),
+});
+
+export const getPushSubscriptionState = query({
+  args: {
+    actor: actorValidator,
+  },
+  handler: (ctx, args) => getPushSubscriptionStateForActorHandler(ctx, args),
+});
+
+export const upsertPushSubscription = mutation({
+  args: {
+    actor: actorValidator,
+    subscription: v.object({
+      endpoint: v.string(),
+      keys: v.object({
+        p256dh: v.string(),
+        auth: v.string(),
+      }),
+      expirationTime: v.union(v.number(), v.null()),
+    }),
+  },
+  handler: (ctx, args) => upsertPushSubscriptionForActorHandler(ctx, args),
+});
+
+export const removePushSubscription = mutation({
+  args: {
+    actor: actorValidator,
+    endpoint: v.optional(v.string()),
+    all: v.optional(v.boolean()),
+  },
+  handler: (ctx, args) => removePushSubscriptionForActorHandler(ctx, args),
+});
+
+export const listActivePushSubscriptionsForRecipients = internalQuery({
+  args: {
+    recipientUserIds: v.array(v.id("users")),
+  },
+  handler: (ctx, args) => listActivePushSubscriptionsForRecipientsHandler(ctx, args),
+});
+
+export const disablePushSubscriptionByEndpoint = internalMutation({
+  args: {
+    endpoint: v.string(),
+    reason: v.optional(v.string()),
+  },
+  handler: (ctx, args) => disablePushSubscriptionByEndpointHandler(ctx, args),
 });

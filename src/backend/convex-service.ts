@@ -13,6 +13,8 @@ import type {
   Modality,
   NotificationRecord,
   OpenFeedWindow,
+  PushSubscriptionPayload,
+  PushSubscriptionState,
   UserRecord,
 } from "@/src/domain/types";
 
@@ -287,6 +289,43 @@ export class ConvexPadelService {
     const actor = parseFirebaseActorToken(token);
     try {
       return await this.client.query(api.padel.listNotificationsForActor, { actor, limit });
+    } catch (error) {
+      return normalizeError(error);
+    }
+  }
+
+  async getPushSubscriptionState(token: string): Promise<PushSubscriptionState> {
+    const actor = parseFirebaseActorToken(token);
+    try {
+      return await this.client.query(api.padel.getPushSubscriptionState, { actor });
+    } catch (error) {
+      return normalizeError(error);
+    }
+  }
+
+  async upsertPushSubscription(token: string, subscription: PushSubscriptionPayload): Promise<PushSubscriptionState> {
+    const actor = parseFirebaseActorToken(token);
+    try {
+      return await this.client.mutation(api.padel.upsertPushSubscription, {
+        actor,
+        subscription,
+      });
+    } catch (error) {
+      return normalizeError(error);
+    }
+  }
+
+  async removePushSubscription(
+    token: string,
+    options?: { endpoint?: string; all?: boolean },
+  ): Promise<PushSubscriptionState> {
+    const actor = parseFirebaseActorToken(token);
+    try {
+      return await this.client.mutation(api.padel.removePushSubscription, {
+        actor,
+        endpoint: options?.endpoint,
+        all: options?.all,
+      });
     } catch (error) {
       return normalizeError(error);
     }

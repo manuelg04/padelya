@@ -5,3 +5,4 @@ export const USE_AUTH_EMULATOR =
   process.env.NEXT_PUBLIC_USE_AUTH_EMULATOR === "true" ||
   process.env.NODE_ENV === "test";
 export const ENABLE_CONVEX_REALTIME = !USE_MOCK_BACKEND && Boolean(process.env.NEXT_PUBLIC_CONVEX_URL);
+export const WEB_PUSH_VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_WEB_PUSH_VAPID_PUBLIC_KEY ?? "";

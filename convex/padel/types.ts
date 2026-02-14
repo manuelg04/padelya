@@ -15,10 +15,12 @@ export type MatchDoc = Doc<"matches">;
 export type MatchParticipantDoc = Doc<"matchParticipants">;
 export type MatchWatcherDoc = Doc<"matchWatchers">;
 export type NotificationDoc = Doc<"notifications">;
+export type PushSubscriptionDoc = Doc<"pushSubscriptions">;
 
 export type UserId = Id<"users">;
 export type MatchId = Id<"matches">;
 export type NotificationId = Id<"notifications">;
+export type PushSubscriptionId = Id<"pushSubscriptions">;
 export type StorageId = Id<"_storage">;
 export type AuthIdentity = UserIdentity;
 
@@ -116,6 +118,43 @@ export interface ListNotificationsArgs {
 
 export interface ListNotificationsForActorArgs extends ActorArgs {
   limit?: number;
+}
+
+export interface PushSubscriptionPayload {
+  endpoint: string;
+  keys: {
+    p256dh: string;
+    auth: string;
+  };
+  expirationTime: number | null;
+}
+
+export interface PushSubscriptionState {
+  enabled: boolean;
+  activeCount: number;
+  updatedAt: string | null;
+}
+
+export interface UpsertPushSubscriptionArgs extends ActorArgs {
+  subscription: PushSubscriptionPayload;
+}
+
+export interface RemovePushSubscriptionArgs extends ActorArgs {
+  endpoint?: string;
+  all?: boolean;
+}
+
+export interface ListActivePushSubscriptionsArgs {
+  recipientUserIds: UserId[];
+}
+
+export interface ActivePushSubscriptionRecord {
+  id: PushSubscriptionId;
+  userId: UserId;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  expirationTime: number | null;
 }
 
 export interface NotifyUserInput {

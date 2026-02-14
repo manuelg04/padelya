@@ -23,6 +23,8 @@ import {
   type Modality,
   type NotificationRecord,
   type OpenFeedWindow,
+  type PushSubscriptionPayload,
+  type PushSubscriptionState,
   type UserRecord,
 } from "@/src/domain/types";
 import { APP_TIMEZONE, USE_AUTH_EMULATOR } from "@/src/lib/env";
@@ -49,6 +51,12 @@ interface MatchWatcherRecord {
 interface StoredNotificationRecord extends NotificationRecord {
   recipientUserId: string;
   dedupeKey?: string;
+}
+
+interface StoredPushSubscriptionRecord extends PushSubscriptionPayload {
+  createdAt: string;
+  updatedAt: string;
+  isActive: boolean;
 }
 
 const WATCHER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -88,6 +96,7 @@ export class PadelService {
   private participantsByMatch = new Map<string, Map<string, MatchParticipant>>();
   private watchersByMatch = new Map<string, Map<string, MatchWatcherRecord>>();
   private notificationsByUser = new Map<string, StoredNotificationRecord[]>();
+  private pushSubscriptionsByUser = new Map<string, Map<string, StoredPushSubscriptionRecord>>();
   private locksByMatchId = new Map<string, AsyncLock>();
   private logs: EventLogRecord[] = [];
   private events = new EventEmitter();
@@ -103,6 +112,7 @@ export class PadelService {
     this.participantsByMatch.clear();
     this.watchersByMatch.clear();
     this.notificationsByUser.clear();
+    this.pushSubscriptionsByUser.clear();
     this.locksByMatchId.clear();
     this.logs = [];
   }
@@ -387,6 +397,69 @@ export class PadelService {
       }));
   }
 
+  async getPushSubscriptionState(token: string): Promise<PushSubscriptionState> {
+    const actor = this.getUserByToken(token);
+    return this.toPushSubscriptionState(actor.id);
+  }
+
+  async upsertPushSubscription(token: string, subscription: PushSubscriptionPayload): Promise<PushSubscriptionState> {
+    const actor = this.getUserByToken(token);
+    const endpoint = subscription.endpoint.trim();
+    const p256dh = subscription.keys.p256dh.trim();
+    const auth = subscription.keys.auth.trim();
+
+    if (!endpoint || !p256dh || !auth) {
+      throw new DomainError("VALIDATION_ERROR", "Suscripción push inválida.");
+    }
+
+    const now = nowIso();
+    const byEndpoint = this.mustGetPushSubscriptionsByUser(actor.id);
+    const existing = byEndpoint.get(endpoint);
+
+    byEndpoint.set(endpoint, {
+      endpoint,
+      keys: { p256dh, auth },
+      expirationTime: subscription.expirationTime,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      isActive: true,
+    });
+
+    return this.toPushSubscriptionState(actor.id);
+  }
+
+  async removePushSubscription(
+    token: string,
+    options?: { endpoint?: string; all?: boolean },
+  ): Promise<PushSubscriptionState> {
+    const actor = this.getUserByToken(token);
+    const byEndpoint = this.mustGetPushSubscriptionsByUser(actor.id);
+    const now = nowIso();
+
+    if (options?.all || !options?.endpoint) {
+      for (const [endpoint, row] of byEndpoint.entries()) {
+        byEndpoint.set(endpoint, {
+          ...row,
+          isActive: false,
+          updatedAt: now,
+        });
+      }
+      return this.toPushSubscriptionState(actor.id);
+    }
+
+    const endpoint = options.endpoint.trim();
+    const existing = byEndpoint.get(endpoint);
+    if (existing) {
+      byEndpoint.set(endpoint, {
+        ...existing,
+        isActive: false,
+        updatedAt: now,
+      });
+    }
+
+    return this.toPushSubscriptionState(actor.id);
+  }
+
   async join(publicId: string, token: string): Promise<MatchView> {
     const actor = this.getUserByToken(token);
     this.ensureAlias(actor);
@@ -639,6 +712,41 @@ export class PadelService {
       dedupeKey: input.dedupeKey,
     });
     this.notificationsByUser.set(input.recipientUserId, notifications);
+  }
+
+  private mustGetPushSubscriptionsByUser(userId: string): Map<string, StoredPushSubscriptionRecord> {
+    let byEndpoint = this.pushSubscriptionsByUser.get(userId);
+    if (!byEndpoint) {
+      byEndpoint = new Map<string, StoredPushSubscriptionRecord>();
+      this.pushSubscriptionsByUser.set(userId, byEndpoint);
+    }
+    return byEndpoint;
+  }
+
+  private toPushSubscriptionState(userId: string): PushSubscriptionState {
+    const byEndpoint = this.pushSubscriptionsByUser.get(userId);
+    if (!byEndpoint) {
+      return {
+        enabled: false,
+        activeCount: 0,
+        updatedAt: null,
+      };
+    }
+
+    const activeRows = [...byEndpoint.values()].filter((subscription) => subscription.isActive);
+    const updatedAt =
+      activeRows.length > 0
+        ? activeRows.reduce(
+            (current, row) => (row.updatedAt > current ? row.updatedAt : current),
+            activeRows[0].updatedAt,
+          )
+        : null;
+
+    return {
+      enabled: activeRows.length > 0,
+      activeCount: activeRows.length,
+      updatedAt,
+    };
   }
 
   private mustGetUser(userId: string): UserRecord {

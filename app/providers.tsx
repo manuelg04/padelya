@@ -2,11 +2,15 @@
 
 import { AuthProvider } from "@/src/components/auth/auth-provider";
 import { ConvexAuthProvider } from "@/src/components/auth/convex-auth-provider";
+import { PushBootstrap } from "@/src/components/push/push-bootstrap";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <AuthProvider>
-      <ConvexAuthProvider>{children}</ConvexAuthProvider>
+      <ConvexAuthProvider>
+        <PushBootstrap />
+        {children}
+      </ConvexAuthProvider>
     </AuthProvider>
   );
 }

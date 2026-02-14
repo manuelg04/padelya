@@ -1,8 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
-import { Camera, Loader2, Save, Trash2, User, XCircle } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
+import { Bell, Camera, Loader2, Save, Trash2, User, XCircle } from "lucide-react";
 
 import { useAuth } from "@/src/components/auth/auth-provider";
 import { AppShell } from "@/src/components/layout/app-shell";
@@ -12,21 +12,36 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/src
 import { Input } from "@/src/components/ui/input";
 import { Label } from "@/src/components/ui/label";
 import { Separator } from "@/src/components/ui/separator";
+import type { PushSubscriptionState } from "@/src/domain/types";
 import { getAvatarInitials, validateAvatarFile } from "@/src/lib/avatar";
+import { getPushSubscriptionState, removePushSubscription, upsertPushSubscription } from "@/src/lib/api/client";
 import { USE_MOCK_BACKEND } from "@/src/lib/env";
+import {
+  getPushAvailability,
+  registerPushServiceWorker,
+  requestPushPermission,
+  subscribeToPush,
+  toPushSubscriptionPayload,
+  unsubscribeFromPush,
+} from "@/src/lib/push/client";
 import { toErrorMessage } from "@/src/lib/utils";
 
 const MIN_ALIAS_LENGTH = 3;
 const MAX_ALIAS_LENGTH = 24;
 
 export default function ProfilePage() {
-  const { loading, user, saveAlias, uploadAvatar, removeAvatar } = useAuth();
+  const { loading, user, token, saveAlias, uploadAvatar, removeAvatar } = useAuth();
   const router = useRouter();
   const [redirect, setRedirect] = useState("/");
   const [alias, setAlias] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isRemovingAvatar, setIsRemovingAvatar] = useState(false);
+  const [isPushLoading, setIsPushLoading] = useState(false);
+  const [isEnablingPush, setIsEnablingPush] = useState(false);
+  const [isDisablingPush, setIsDisablingPush] = useState(false);
+  const [pushState, setPushState] = useState<PushSubscriptionState | null>(null);
+  const [pushAvailability, setPushAvailability] = useState(getPushAvailability());
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -95,6 +110,150 @@ export default function ProfilePage() {
     }
   }
 
+  const refreshPushState = useCallback(async () => {
+    const availability = getPushAvailability();
+    setPushAvailability(availability);
+
+    if (!token || USE_MOCK_BACKEND) {
+      setPushState(null);
+      setIsPushLoading(false);
+      return;
+    }
+
+    try {
+      setIsPushLoading(true);
+      const nextState = await getPushSubscriptionState(token);
+      setPushState(nextState);
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setIsPushLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    void refreshPushState();
+  }, [refreshPushState]);
+
+  async function onEnablePush() {
+    if (!token) {
+      return;
+    }
+
+    try {
+      setIsEnablingPush(true);
+      setError(null);
+
+      const availability = getPushAvailability();
+      setPushAvailability(availability);
+      if (!availability.supported) {
+        if (availability.reason === "requires_install") {
+          setError("Para activar push en iPhone/iPad instala la app en Home Screen.");
+        } else {
+          setError("Este navegador no soporta notificaciones push.");
+        }
+        return;
+      }
+
+      const permission =
+        availability.permission === "granted" ? "granted" : await requestPushPermission();
+      if (permission !== "granted") {
+        await refreshPushState();
+        return;
+      }
+
+      const registration = await registerPushServiceWorker();
+      const subscription = await subscribeToPush(registration);
+      await upsertPushSubscription(token, toPushSubscriptionPayload(subscription));
+      await refreshPushState();
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setIsEnablingPush(false);
+    }
+  }
+
+  async function onDisablePush() {
+    if (!token) {
+      return;
+    }
+
+    try {
+      setIsDisablingPush(true);
+      setError(null);
+
+      const availability = getPushAvailability();
+      setPushAvailability(availability);
+
+      let endpoint: string | undefined;
+      if (availability.supported) {
+        const registration = await registerPushServiceWorker();
+        const removed = await unsubscribeFromPush(registration);
+        endpoint = removed.endpoint ?? undefined;
+      }
+
+      await removePushSubscription(token, {
+        endpoint,
+        all: !endpoint,
+      });
+      await refreshPushState();
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setIsDisablingPush(false);
+    }
+  }
+
+  const pushStatus = (() => {
+    if (USE_MOCK_BACKEND) {
+      return {
+        label: "No soportado",
+        description: "Push disponible solo con backend Convex real.",
+      };
+    }
+
+    if (!pushAvailability.supported) {
+      if (pushAvailability.reason === "requires_install") {
+        return {
+          label: "Requiere instalar app",
+          description: "Instala la app en Home Screen para habilitar push en iOS/iPadOS.",
+        };
+      }
+      return {
+        label: "No soportado",
+        description: "Este navegador no soporta Push API.",
+      };
+    }
+
+    if (pushAvailability.permission === "denied") {
+      return {
+        label: "Bloqueadas",
+        description: "Permiso bloqueado en el navegador/dispositivo.",
+      };
+    }
+
+    if (pushState?.enabled) {
+      return {
+        label: "Activadas",
+        description:
+          pushState.activeCount === 1
+            ? "1 dispositivo suscrito."
+            : `${pushState.activeCount} dispositivos suscritos.`,
+      };
+    }
+
+    return {
+      label: "Desactivadas",
+      description: "Actívalas para recibir avisos cuando un jugador se una.",
+    };
+  })();
+
+  const canEnablePush =
+    !USE_MOCK_BACKEND &&
+    pushAvailability.supported &&
+    pushAvailability.permission !== "denied";
+  const canDisablePush = !USE_MOCK_BACKEND && Boolean(pushState?.enabled);
+
   const trimmedLength = alias.trim().length;
   const isValidLength = trimmedLength >= MIN_ALIAS_LENGTH && trimmedLength <= MAX_ALIAS_LENGTH;
   const initials = getAvatarInitials(user?.alias ?? alias);
@@ -155,6 +314,58 @@ export default function ProfilePage() {
             ) : (
               <p className="text-xs text-zinc-500">Foto disponible con backend Convex.</p>
             )}
+          </div>
+
+          <Separator />
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-zinc-800">Notificaciones push</h3>
+              <span className="rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-[11px] font-semibold text-zinc-700">
+                {pushStatus.label}
+              </span>
+            </div>
+
+            <p className="text-xs text-zinc-500">{pushStatus.description}</p>
+            {isPushLoading ? <p className="text-xs text-zinc-500">Sincronizando estado...</p> : null}
+
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onEnablePush}
+                disabled={
+                  !canEnablePush ||
+                  isPushLoading ||
+                  isEnablingPush ||
+                  isDisablingPush ||
+                  isSaving ||
+                  isUploading ||
+                  isRemovingAvatar
+                }
+              >
+                {isEnablingPush ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bell className="h-4 w-4" />}
+                {isEnablingPush ? "Activando..." : "Activar push"}
+              </Button>
+
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={onDisablePush}
+                disabled={
+                  !canDisablePush ||
+                  isPushLoading ||
+                  isEnablingPush ||
+                  isDisablingPush ||
+                  isSaving ||
+                  isUploading ||
+                  isRemovingAvatar
+                }
+              >
+                {isDisablingPush ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bell className="h-4 w-4" />}
+                {isDisablingPush ? "Desactivando..." : "Desactivar push"}
+              </Button>
+            </div>
           </div>
 
           <Separator />

@@ -68,6 +68,22 @@ export default defineSchema({
     .index("by_recipient_read_at", ["recipientUserId", "readAt"])
     .index("by_recipient_dedupe", ["recipientUserId", "dedupeKey"]),
 
+  pushSubscriptions: defineTable({
+    userId: v.id("users"),
+    endpoint: v.string(),
+    p256dh: v.string(),
+    auth: v.string(),
+    expirationTime: v.optional(v.number()),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+    isActive: v.boolean(),
+    disabledReason: v.optional(v.string()),
+    lastFailureAt: v.optional(v.string()),
+  })
+    .index("by_user_active", ["userId", "isActive"])
+    .index("by_user_endpoint", ["userId", "endpoint"])
+    .index("by_endpoint", ["endpoint"]),
+
   matchWatchers: defineTable({
     matchId: v.id("matches"),
     userId: v.id("users"),

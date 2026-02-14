@@ -78,6 +78,10 @@ Con `.env.local`:
   - Partido lleno (4/4)
   - Se liberó cupo
   - Partido cancelado
+- Web Push PWA (`join` P0)
+  - Suscripción push persistida por usuario/dispositivo
+  - Envío push al organizador y participantes actuales (excepto quien se une)
+  - Tap en push abre `/partido/[publicId]`
 
 ## Pruebas incluidas
 
@@ -87,6 +91,9 @@ Con `.env.local`:
 - Derivacion de estado
 - Conversion `datetime-local` (America/Bogota) a UTC y vuelta
 - Formato del resumen de WhatsApp
+- Formato de mensaje push `join` (Hoy/Mañana/fecha + hora)
+- Resolución de receptores push (excluye siempre al jugador que entra)
+- Utilidades cliente push (detección soporte + parseo VAPID base64url)
 
 ### Integration (Vitest)
 
@@ -102,6 +109,22 @@ Con `.env.local`:
 - Join/leave con auth emulada
 - Cancelado visible y acciones bloqueadas
 - Copiar resumen
+
+### Verificación manual Web Push (P0)
+
+1. Generar claves VAPID:
+
+```bash
+pnpm dlx web-push generate-vapid-keys --json
+```
+
+2. Configurar entorno:
+   - Next (`.env.local`): `NEXT_PUBLIC_WEB_PUSH_VAPID_PUBLIC_KEY`
+   - Convex env: `WEB_PUSH_VAPID_PRIVATE_KEY`, `WEB_PUSH_VAPID_SUBJECT`
+3. Instalar la PWA en Home Screen en el dispositivo a probar.
+4. Iniciar sesión como organizador y activar push en `/perfil`.
+5. Con otro usuario, unirse al partido.
+6. Verificar recepción de push y que al tocar abre `/partido/{publicId}`.
 
 ## Variables de entorno
 
@@ -129,6 +152,13 @@ Con `.env.local`:
 - `NEXT_PUBLIC_USE_MOCK_BACKEND=false`
 - `NEXT_PUBLIC_CONVEX_URL` configurada
 - Firebase Phone Auth funcionando para obtener ID token real
+
+### Para Web Push PWA (`join` P0)
+
+- `NEXT_PUBLIC_WEB_PUSH_VAPID_PUBLIC_KEY`
+- `WEB_PUSH_VAPID_PRIVATE_KEY`
+- `WEB_PUSH_VAPID_SUBJECT` (ejemplo: `mailto:tu-correo@dominio.com`)
+- `NEXT_PUBLIC_CONVEX_SITE_URL` (base URL para deep link de push)
 
 ## Estructura principal
 

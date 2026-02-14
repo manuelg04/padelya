@@ -98,3 +98,18 @@ export interface NotificationRecord {
   readAt: string | null;
   isRead: boolean;
 }
+
+export interface PushSubscriptionPayload {
+  endpoint: string;
+  keys: {
+    p256dh: string;
+    auth: string;
+  };
+  expirationTime: number | null;
+}
+
+export interface PushSubscriptionState {
+  enabled: boolean;
+  activeCount: number;
+  updatedAt: string | null;
+}

@@ -17,7 +17,9 @@ import {
   upsertMatchWatcher,
 } from "./matches_repo";
 import { notifyManyUsers } from "./notifications_service";
+import { resolveJoinPushRecipientUserIds } from "./push_message";
 import { ensureUser, findUserByFirebaseUid } from "./users_repo";
+import { internal } from "../_generated/api";
 import type { QueryCtx } from "../_generated/server";
 import type {
   CreateMatchArgs,
@@ -279,6 +281,19 @@ export async function joinHandler(ctx: WriteCtx, args: PublicIdActorArgs): Promi
       createdAt: now,
     }),
   });
+
+  const pushRecipientUserIds = resolveJoinPushRecipientUserIds(currentParticipantUserIds, user._id);
+  if (pushRecipientUserIds.length > 0) {
+    await ctx.scheduler.runAfter(0, internal.push_actions.sendJoinPush, {
+      recipientUserIds: pushRecipientUserIds,
+      joinerUserId: user._id,
+      joinerAlias: user.alias,
+      club: match.club,
+      startsAtUtc: match.startsAtUtc,
+      matchPublicId: match.publicId,
+      eventAt: now,
+    });
+  }
 
   if (participantsBefore.length === MAX_PLAYERS - 1) {
     const participantsAfter = await listParticipantsForMatch(ctx, match._id);

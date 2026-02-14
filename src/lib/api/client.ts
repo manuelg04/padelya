@@ -4,6 +4,8 @@ import type {
   Modality,
   NotificationRecord,
   OpenFeedWindow,
+  PushSubscriptionPayload,
+  PushSubscriptionState,
   UserRecord,
 } from "@/src/domain/types";
 
@@ -218,6 +220,52 @@ export async function listNotifications(token: string, limit = 50): Promise<Noti
   });
   const payload = await parseJson<{ notifications: NotificationRecord[] }>(response);
   return payload.notifications;
+}
+
+export async function getPushSubscriptionState(token: string): Promise<PushSubscriptionState> {
+  const response = await fetch("/api/push/subscription", {
+    headers: {
+      ...authHeaders(token),
+    },
+    cache: "no-store",
+  });
+  const payload = await parseJson<{ state: PushSubscriptionState }>(response);
+  return payload.state;
+}
+
+export async function upsertPushSubscription(
+  token: string,
+  subscription: PushSubscriptionPayload,
+): Promise<PushSubscriptionState> {
+  const response = await fetch("/api/push/subscription", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(token),
+    },
+    body: JSON.stringify(subscription),
+  });
+  const payload = await parseJson<{ state: PushSubscriptionState }>(response);
+  return payload.state;
+}
+
+export async function removePushSubscription(
+  token: string,
+  options?: { endpoint?: string; all?: boolean },
+): Promise<PushSubscriptionState> {
+  const response = await fetch("/api/push/subscription", {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(token),
+    },
+    body: JSON.stringify({
+      endpoint: options?.endpoint,
+      all: options?.all,
+    }),
+  });
+  const payload = await parseJson<{ state: PushSubscriptionState }>(response);
+  return payload.state;
 }
 
 export async function generateAvatarUploadUrl(token: string): Promise<string> {
