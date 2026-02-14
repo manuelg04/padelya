@@ -13,7 +13,7 @@ import type {
 
 function toNotificationListItem(row: NotificationDoc): NotificationListItem {
   return {
-    id: String(row._id),
+    id: row._id,
     type: row.type,
     title: row.title,
     message: row.message,
@@ -38,10 +38,10 @@ export async function listNotificationsForMeHandler(
   const rows = await ctx.db
     .query("notifications")
     .withIndex("by_recipient_created_at", (q) => q.eq("recipientUserId", user._id))
-    .collect();
+    .order("desc")
+    .take(limit);
 
-  rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  return rows.slice(0, limit).map(toNotificationListItem);
+  return rows.map(toNotificationListItem);
 }
 
 export async function listNotificationsForActorHandler(
@@ -57,10 +57,10 @@ export async function listNotificationsForActorHandler(
   const rows = await ctx.db
     .query("notifications")
     .withIndex("by_recipient_created_at", (q) => q.eq("recipientUserId", user._id))
-    .collect();
+    .order("desc")
+    .take(limit);
 
-  rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  return rows.slice(0, limit).map(toNotificationListItem);
+  return rows.map(toNotificationListItem);
 }
 
 export async function unreadNotificationsCountHandler(ctx: QueryCtx): Promise<number> {

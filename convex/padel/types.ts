@@ -181,7 +181,7 @@ export interface EventLogInput {
 }
 
 export interface NotificationListItem {
-  id: string;
+  id: NotificationId;
   type: NotificationType;
   title: string;
   message: string;

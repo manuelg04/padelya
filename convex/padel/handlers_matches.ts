@@ -106,8 +106,7 @@ export async function listHomeHandler(ctx: QueryCtx, args: ListHomeArgs): Promis
   const actorUser = args.actor ? await findUserByFirebaseUid(ctx, args.actor.firebaseUid) : null;
   const actorUserId = actorUser?._id ?? null;
 
-  const matches = await ctx.db.query("matches").withIndex("by_starts_at_utc").collect();
-  matches.sort((a, b) => a.startsAtUtc.localeCompare(b.startsAtUtc));
+  const matches = await ctx.db.query("matches").withIndex("by_starts_at_utc").order("asc").collect();
 
   return Promise.all(matches.map((match) => buildMatchView(ctx, match, actorUserId)));
 }
@@ -148,8 +147,13 @@ export async function listOpenFeedHandler(ctx: QueryCtx, args: ListOpenFeedArgs)
   const now = args.nowIso ? new Date(args.nowIso) : new Date();
   const { fromInclusiveUtc, toInclusiveUtc } = getOpenFeedUtcRange(args.window, now);
 
-  const matches = await ctx.db.query("matches").withIndex("by_starts_at_utc").collect();
-  const filteredMatches = matches.filter((match) => {
+  const candidateMatches = await ctx.db
+    .query("matches")
+    .withIndex("by_starts_at_utc", (q) => q.gte("startsAtUtc", fromInclusiveUtc).lte("startsAtUtc", toInclusiveUtc))
+    .order("asc")
+    .collect();
+
+  const filteredMatches = candidateMatches.filter((match) => {
     if (match.canceledAt) {
       return false;
     }
@@ -158,7 +162,7 @@ export async function listOpenFeedHandler(ctx: QueryCtx, args: ListOpenFeedArgs)
       return false;
     }
 
-    return match.startsAtUtc >= fromInclusiveUtc && match.startsAtUtc <= toInclusiveUtc;
+    return true;
   });
 
   const openMatches: MatchDoc[] = [];

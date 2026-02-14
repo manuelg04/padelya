@@ -52,6 +52,14 @@ function validateAvatarMetadata(metadata: { contentType?: string | null; size?: 
   }
 }
 
+async function deleteStorageObjectBestEffort(ctx: WriteCtx, storageId: SetMyAvatarArgs["storageId"]): Promise<void> {
+  try {
+    await ctx.storage.delete(storageId);
+  } catch {
+    // Ignore cleanup failures; validation error remains the primary outcome.
+  }
+}
+
 export async function generateAvatarUploadUrlHandler(ctx: WriteCtx): Promise<string> {
   const identity = await getRequiredIdentity(ctx);
   await ensureUserFromIdentity(ctx, identity);
@@ -64,12 +72,18 @@ export async function setMyAvatarHandler(ctx: WriteCtx, args: SetMyAvatarArgs): 
 
   const metadata = await ctx.storage.getMetadata(args.storageId);
   if (!metadata) {
+    await deleteStorageObjectBestEffort(ctx, args.storageId);
     throw new Error("VALIDATION_ERROR");
   }
-  validateAvatarMetadata({
-    contentType: metadata.contentType,
-    size: metadata.size,
-  });
+  try {
+    validateAvatarMetadata({
+      contentType: metadata.contentType,
+      size: metadata.size,
+    });
+  } catch (error) {
+    await deleteStorageObjectBestEffort(ctx, args.storageId);
+    throw error;
+  }
 
   const now = nowIso();
   const previousStorageId = user.avatarStorageId;

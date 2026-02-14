@@ -5,10 +5,12 @@ import { Bell } from "lucide-react";
 import { useQuery } from "convex/react";
 
 import { api } from "@/convex/_generated/api";
+import { useAuth } from "@/src/components/auth/auth-provider";
 import { Button } from "@/src/components/ui/button";
 
 export function NotificationBell() {
-  const unreadCount = useQuery(api.padel.unreadNotificationsCount, {}) ?? 0;
+  const { user } = useAuth();
+  const unreadCount = useQuery(api.padel.unreadNotificationsCount, user ? {} : "skip") ?? 0;
 
   return (
     <Button variant="ghost" size="icon" asChild aria-label="Notificaciones">

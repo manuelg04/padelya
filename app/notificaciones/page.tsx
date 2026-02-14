@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Bell, CheckCheck, LogIn } from "lucide-react";
 import { useMutation, useQuery } from "convex/react";
 
@@ -16,6 +16,16 @@ import { listNotifications } from "@/src/lib/api/client";
 import { ENABLE_CONVEX_REALTIME } from "@/src/lib/env";
 import { toErrorMessage } from "@/src/lib/utils";
 
+type NotificationListItemBase = {
+  id: string;
+  type: NotificationRecord["type"];
+  title: string;
+  message: string;
+  matchPublicId: string | null;
+  createdAt: string;
+  isRead: boolean;
+};
+
 function formatCreatedAt(isoDate: string): string {
   const date = new Date(isoDate);
   return new Intl.DateTimeFormat("es-CO", {
@@ -28,7 +38,7 @@ function formatCreatedAt(isoDate: string): string {
   }).format(date);
 }
 
-function resolveNotificationLink(item: NotificationRecord): string | null {
+function resolveNotificationLink(item: Pick<NotificationListItemBase, "type" | "matchPublicId">): string | null {
   if (!item.matchPublicId) {
     return null;
   }
@@ -59,12 +69,12 @@ function RequireLoginCard() {
   );
 }
 
-function NotificationList({
+function NotificationList<TItem extends NotificationListItemBase>({
   items,
   onOpen,
 }: {
-  items: NotificationRecord[];
-  onOpen: (item: NotificationRecord) => Promise<void> | void;
+  items: TItem[];
+  onOpen: (item: TItem) => Promise<void> | void;
 }) {
   return (
     <>
@@ -104,7 +114,7 @@ function ConvexNotificationsPage() {
   const markRead = useMutation(api.padel.markNotificationRead);
   const markAllRead = useMutation(api.padel.markAllNotificationsRead);
 
-  const items = useMemo(() => (notifications ?? []) as NotificationRecord[], [notifications]);
+  const items = notifications ?? [];
 
   if (!loading && !user) {
     return <RequireLoginCard />;
@@ -144,10 +154,10 @@ function ConvexNotificationsPage() {
 
         {notifications ? (
           <NotificationList
-            items={items}
+            items={notifications}
             onOpen={async (item) => {
               if (!item.isRead) {
-                await markRead({ notificationId: item.id as never });
+                await markRead({ notificationId: item.id });
               }
               const target = resolveNotificationLink(item);
               if (target) {
