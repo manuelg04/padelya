@@ -10,6 +10,7 @@ import { AppShell } from "@/src/components/layout/app-shell";
 import { Button } from "@/src/components/ui/button";
 import { Calendar } from "@/src/components/ui/calendar";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/src/components/ui/card";
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from "@/src/components/ui/drawer";
 import { Input } from "@/src/components/ui/input";
 import { Label } from "@/src/components/ui/label";
 import { Separator } from "@/src/components/ui/separator";
@@ -106,7 +107,7 @@ export default function CreateMatchPage() {
   const [club, setClub] = useState("");
   const [selectedDateKey, setSelectedDateKey] = useState<string>("");
   const [selectedHour, setSelectedHour] = useState("");
-  const [showCalendar, setShowCalendar] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const [category, setCategory] = useState("");
   const [modality, setModality] = useState<Modality>("mixto");
   const [error, setError] = useState<string | null>(null);
@@ -237,37 +238,43 @@ export default function CreateMatchPage() {
                 })}
               </div>
 
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full justify-start text-left font-medium"
-                onClick={() => setShowCalendar((previous) => !previous)}
-                data-testid="create-date-trigger"
-              >
-                <CalendarDays className="h-4 w-4 text-emerald-600" />
-                {selectedDateKey ? formatBogotaDateLabel(selectedDateKey) : "Selecciona una fecha"}
-              </Button>
-
-              {showCalendar ? (
-                <div className="rounded-xl border border-zinc-200 bg-white p-2 shadow-sm">
-                  <Calendar
-                    mode="single"
-                    selected={selectedDate}
-                    onSelect={(value) => {
-                      if (!value) {
-                        return;
-                      }
-                      setSelectedDateKey(toBogotaDateKey(value));
-                    }}
-                    disabled={(date) => toBogotaDateKey(date) < nowParts.dateKey}
-                    locale={es}
-                    className="mx-auto [--cell-size:2.6rem] sm:[--cell-size:2.8rem]"
-                    timeZone="America/Bogota"
-                    captionLayout="dropdown"
-                    startMonth={new Date(`${nowParts.dateKey}T00:00:00-05:00`)}
-                  />
-                </div>
-              ) : null}
+              <Drawer open={calendarOpen} onOpenChange={setCalendarOpen}>
+                <DrawerTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-start text-left font-medium"
+                    data-testid="create-date-trigger"
+                  >
+                    <CalendarDays className="h-4 w-4 text-emerald-600" />
+                    {selectedDateKey ? formatBogotaDateLabel(selectedDateKey) : "Selecciona una fecha"}
+                  </Button>
+                </DrawerTrigger>
+                <DrawerContent>
+                  <DrawerHeader>
+                    <DrawerTitle>Selecciona una fecha</DrawerTitle>
+                  </DrawerHeader>
+                  <div className="px-4 pb-6">
+                    <Calendar
+                      mode="single"
+                      selected={selectedDate}
+                      onSelect={(value) => {
+                        if (!value) {
+                          return;
+                        }
+                        setSelectedDateKey(toBogotaDateKey(value));
+                        setCalendarOpen(false);
+                      }}
+                      disabled={(date) => toBogotaDateKey(date) < nowParts.dateKey}
+                      locale={es}
+                      className="mx-auto [--cell-size:2.6rem] sm:[--cell-size:2.8rem]"
+                      timeZone="America/Bogota"
+                      captionLayout="dropdown"
+                      startMonth={new Date(`${nowParts.dateKey}T00:00:00-05:00`)}
+                    />
+                  </div>
+                </DrawerContent>
+              </Drawer>
 
               <div className="space-y-2">
                 <Label htmlFor="hour-slot" className="flex items-center gap-1.5">
