@@ -1,6 +1,6 @@
 export const MAX_PLAYERS = 4;
 
-export type MatchStatus = "abierta" | "cerrada" | "cancelada";
+export type MatchStatus = "abierta" | "cerrada" | "cancelada" | "no_se_armo";
 export type Modality = "mixto" | "masc" | "fem";
 export type OpenFeedWindow = "today" | "next7";
 

@@ -12,6 +12,7 @@ const STATUS_BORDER_COLOR: Record<MatchStatus, string> = {
   abierta: "border-l-emerald-500",
   cerrada: "border-l-amber-500",
   cancelada: "border-l-rose-400",
+  no_se_armo: "border-l-orange-400",
 };
 
 const PLAYER_SLOT_INDEXES = Array.from({ length: MAX_PLAYERS }, (_, index) => index);

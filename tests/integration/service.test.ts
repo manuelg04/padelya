@@ -17,6 +17,28 @@ async function fillMatch(service: PadelService, publicId: string, playerTokens: 
   }
 }
 
+function forceMatchStartsAtUtc(service: PadelService, publicId: string, startsAtUtc: string) {
+  const internals = service as unknown as {
+    matchByPublicId: Map<string, string>;
+    matches: Map<string, { startsAtUtc: string; updatedAt: string }>;
+  };
+  const matchId = internals.matchByPublicId.get(publicId);
+  if (!matchId) {
+    throw new Error("Match not found");
+  }
+
+  const current = internals.matches.get(matchId);
+  if (!current) {
+    throw new Error("Match record not found");
+  }
+
+  internals.matches.set(matchId, {
+    ...current,
+    startsAtUtc,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
 describe("PadelService integration", () => {
   let service: PadelService;
 
@@ -376,5 +398,73 @@ describe("PadelService integration", () => {
 
     const onlyMasc = service.listOpenFeed({ window: "next7", modality: "masc", now });
     expect(onlyMasc.map((match) => match.club)).toEqual(["Open Masc Manana"]);
+  });
+
+  it("derives no_se_armo in getMatch when match expired with less than 4 players", async () => {
+    const organizer = await createAuthedUser(service, "+573001113300", "Org NoShow");
+    const match = service.createMatch(organizer, {
+      club: "Padel No Show",
+      startsAtLocal: "2030-02-19T20:00",
+      category: "4ta",
+      modality: "mixto",
+    });
+
+    forceMatchStartsAtUtc(service, match.publicId, "2000-01-01T00:00:00.000Z");
+
+    const view = service.getMatch(match.publicId, organizer);
+    expect(view.status).toBe("no_se_armo");
+    expect(view.canJoin).toBe(false);
+    expect(view.canLeave).toBe(false);
+  });
+
+  it("blocks join, leave and watch actions when derived status is no_se_armo", async () => {
+    const organizer = await createAuthedUser(service, "+573001113301", "Org NoShow Ops");
+    const player = await createAuthedUser(service, "+573001113302", "NoShow Player");
+    const outsider = await createAuthedUser(service, "+573001113303", "NoShow Outsider");
+
+    const match = service.createMatch(organizer, {
+      club: "Padel No Show Ops",
+      startsAtLocal: "2030-02-19T21:00",
+      category: "4ta",
+      modality: "mixto",
+    });
+    await service.join(match.publicId, player);
+
+    forceMatchStartsAtUtc(service, match.publicId, "2000-01-01T00:00:00.000Z");
+
+    await expect(service.join(match.publicId, outsider)).rejects.toMatchObject<DomainError>({
+      code: "VALIDATION_ERROR",
+      message: "Este partido no se armó.",
+    });
+
+    await expect(service.leave(match.publicId, player)).rejects.toMatchObject<DomainError>({
+      code: "VALIDATION_ERROR",
+      message: "Este partido no se armó.",
+    });
+
+    await expect(service.followMatchWatch(match.publicId, outsider)).rejects.toMatchObject<DomainError>({
+      code: "VALIDATION_ERROR",
+      message: "Este partido no se armó.",
+    });
+  });
+
+  it("keeps cancel allowed and idempotent when derived status is no_se_armo", async () => {
+    const organizer = await createAuthedUser(service, "+573001113304", "Org NoShow Cancel");
+    const match = service.createMatch(organizer, {
+      club: "Padel No Show Cancel",
+      startsAtLocal: "2030-02-19T22:00",
+      category: "4ta",
+      modality: "mixto",
+    });
+
+    forceMatchStartsAtUtc(service, match.publicId, "2000-01-01T00:00:00.000Z");
+
+    const firstCancel = await service.cancel(match.publicId, organizer);
+    expect(firstCancel.status).toBe("cancelada");
+    expect(firstCancel.isCanceled).toBe(true);
+
+    const secondCancel = await service.cancel(match.publicId, organizer);
+    expect(secondCancel.status).toBe("cancelada");
+    expect(secondCancel.isCanceled).toBe(true);
   });
 });

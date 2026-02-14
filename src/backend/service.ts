@@ -323,8 +323,12 @@ export class PadelService {
 
     return this.getLock(match.id).withLock(() => {
       const participants = this.mustGetParticipants(match.id);
+      const status = deriveMatchStatus(match.startsAtUtc, participants.size, match.canceledAt, new Date());
       if (match.canceledAt) {
         throw new DomainError("MATCH_CANCELED", "El partido está cancelado.");
+      }
+      if (status === "no_se_armo") {
+        throw new DomainError("VALIDATION_ERROR", "Este partido no se armó.");
       }
       if (match.organizerUserId === actor.id) {
         throw new DomainError("VALIDATION_ERROR", "El organizador no puede activar avisos en su propio partido.");
@@ -391,8 +395,12 @@ export class PadelService {
     return this.getLock(match.id).withLock(async () => {
       const participants = this.mustGetParticipants(match.id);
       const joinedAt = nowIso();
+      const status = deriveMatchStatus(match.startsAtUtc, participants.size, match.canceledAt, new Date());
       if (match.canceledAt) {
         throw new DomainError("MATCH_CANCELED", "El partido está cancelado.");
+      }
+      if (status === "no_se_armo") {
+        throw new DomainError("VALIDATION_ERROR", "Este partido no se armó.");
       }
       if (participants.has(actor.id)) {
         throw new DomainError("ALREADY_JOINED", "Ya estás confirmado en este partido.");
@@ -420,8 +428,12 @@ export class PadelService {
     return this.getLock(match.id).withLock(async () => {
       const participants = this.mustGetParticipants(match.id);
       const participantsBefore = participants.size;
+      const status = deriveMatchStatus(match.startsAtUtc, participants.size, match.canceledAt, new Date());
       if (match.canceledAt) {
         throw new DomainError("MATCH_CANCELED", "El partido está cancelado.");
+      }
+      if (status === "no_se_armo") {
+        throw new DomainError("VALIDATION_ERROR", "Este partido no se armó.");
       }
       if (match.organizerUserId === actor.id) {
         throw new DomainError(
@@ -724,11 +736,15 @@ export class PadelService {
       })
       .sort((a, b) => a.joinedAt.localeCompare(b.joinedAt));
 
-    const status = deriveMatchStatus(participants.length, match.canceledAt);
+    const status = deriveMatchStatus(match.startsAtUtc, participants.length, match.canceledAt, new Date());
     const isJoined = Boolean(actorUserId && participants.some((p) => p.userId === actorUserId));
     const canJoin = Boolean(actorUserId && !isJoined && status === "abierta");
     const canLeave = Boolean(
-      actorUserId && isJoined && status !== "cancelada" && match.organizerUserId !== actorUserId,
+      actorUserId &&
+        isJoined &&
+        status !== "cancelada" &&
+        status !== "no_se_armo" &&
+        match.organizerUserId !== actorUserId,
     );
     const now = nowIso();
 

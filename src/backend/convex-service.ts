@@ -44,8 +44,12 @@ function extractDomainCode(error: unknown): DomainErrorCode | null {
 }
 
 function normalizeError(error: unknown): never {
+  const raw = error instanceof Error ? error.message : String(error ?? "");
   const code = extractDomainCode(error);
   if (code) {
+    if (code === "VALIDATION_ERROR" && raw.includes("Este partido no se armó.")) {
+      throw new DomainError(code, "Este partido no se armó.");
+    }
     throw new DomainError(code, DOMAIN_ERROR_MESSAGES[code]);
   }
 

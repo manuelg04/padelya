@@ -7,7 +7,7 @@ import {
   nowIso,
 } from "./date_time";
 import { logEvent } from "./events";
-import { buildMatchView } from "./match_view";
+import { buildMatchView, deriveStatus } from "./match_view";
 import {
   getMatchByPublicId,
   listActiveWatcherUserIds,
@@ -192,6 +192,10 @@ export async function followMatchWatchHandler(ctx: WriteCtx, args: PublicIdActor
   }
 
   const participants = await listParticipantsForMatch(ctx, match._id);
+  const status = deriveStatus(match.startsAtUtc, participants.length, match.canceledAt, new Date());
+  if (status === "no_se_armo") {
+    throw new Error("VALIDATION_ERROR: Este partido no se armó.");
+  }
   const participantUserIds = new Set(participants.map((participant) => participant.userId));
   if (participantUserIds.has(user._id)) {
     throw new Error("VALIDATION_ERROR");
@@ -242,6 +246,10 @@ export async function joinHandler(ctx: WriteCtx, args: PublicIdActorArgs): Promi
 
   const now = nowIso();
   const participantsBefore = await listParticipantsForMatch(ctx, match._id);
+  const status = deriveStatus(match.startsAtUtc, participantsBefore.length, match.canceledAt, new Date());
+  if (status === "no_se_armo") {
+    throw new Error("VALIDATION_ERROR: Este partido no se armó.");
+  }
 
   if (participantsBefore.length >= MAX_PLAYERS) {
     throw new Error("MATCH_FULL");
@@ -309,6 +317,10 @@ export async function leaveHandler(ctx: WriteCtx, args: PublicIdActorArgs): Prom
 
   const now = nowIso();
   const participantsBefore = await listParticipantsForMatch(ctx, match._id);
+  const status = deriveStatus(match.startsAtUtc, participantsBefore.length, match.canceledAt, new Date());
+  if (status === "no_se_armo") {
+    throw new Error("VALIDATION_ERROR: Este partido no se armó.");
+  }
 
   const participant = await ctx.db
     .query("matchParticipants")

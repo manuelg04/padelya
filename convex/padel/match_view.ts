@@ -1,14 +1,27 @@
 import { MAX_PLAYERS } from "./constants";
-import { nowIso } from "./date_time";
+import { isNoShowExpired, nowIso } from "./date_time";
 import { listParticipantsForMatch } from "./matches_repo";
 import type { MatchDoc, MatchStatus, MatchView, MatchViewParticipant, ReadCtx, UserId } from "./types";
 
-export function deriveStatus(participantCount: number, canceledAt: string | undefined): MatchStatus {
+export function deriveStatus(
+  startsAtUtc: string,
+  participantCount: number,
+  canceledAt: string | undefined,
+  now: Date = new Date(),
+): MatchStatus {
   if (canceledAt) {
     return "cancelada";
   }
 
-  return participantCount >= MAX_PLAYERS ? "cerrada" : "abierta";
+  if (participantCount >= MAX_PLAYERS) {
+    return "cerrada";
+  }
+
+  if (isNoShowExpired(startsAtUtc, participantCount, canceledAt, now)) {
+    return "no_se_armo";
+  }
+
+  return "abierta";
 }
 
 export async function buildMatchView(ctx: ReadCtx, match: MatchDoc, actorUserId: UserId | null): Promise<MatchView> {
@@ -31,7 +44,7 @@ export async function buildMatchView(ctx: ReadCtx, match: MatchDoc, actorUserId:
     }),
   );
 
-  const status = deriveStatus(participants.length, match.canceledAt);
+  const status = deriveStatus(match.startsAtUtc, participants.length, match.canceledAt, new Date());
   const isJoined = Boolean(actorUserId && participantDocs.some((participant) => participant.userId === actorUserId));
 
   let isWatchingReleaseSpot = false;
@@ -61,7 +74,9 @@ export async function buildMatchView(ctx: ReadCtx, match: MatchDoc, actorUserId:
     participants,
     isOrganizer: Boolean(actorUserId && match.organizerUserId === actorUserId),
     canJoin: Boolean(actorUserId && !isJoined && status === "abierta"),
-    canLeave: Boolean(actorUserId && isJoined && status !== "cancelada" && match.organizerUserId !== actorUserId),
+    canLeave: Boolean(
+      actorUserId && isJoined && status !== "cancelada" && status !== "no_se_armo" && match.organizerUserId !== actorUserId,
+    ),
     isCanceled: status === "cancelada",
     isWatchingReleaseSpot,
   };

@@ -5,6 +5,7 @@ const STATUS_CONFIG: Record<MatchStatus, { variant: "success" | "warning" | "dan
   abierta: { variant: "success", label: "Abierta", dotColor: "bg-emerald-500" },
   cerrada: { variant: "warning", label: "Cerrada", dotColor: "bg-amber-500" },
   cancelada: { variant: "danger", label: "Cancelada", dotColor: "bg-rose-500" },
+  no_se_armo: { variant: "warning", label: "No se armó", dotColor: "bg-orange-500" },
 };
 
 export function StatusBadge({ status }: { status: MatchStatus }) {

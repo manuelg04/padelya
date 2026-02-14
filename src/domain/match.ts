@@ -1,5 +1,7 @@
 import { MAX_PLAYERS, type MatchStatus, type MatchView, type OpenFeedWindow } from "@/src/domain/types";
 
+export const NO_SHOW_GRACE_MS = 30 * 60 * 1000;
+
 export function normalizeAlias(alias: string): string {
   return alias.trim().replace(/\s+/g, " ");
 }
@@ -12,11 +14,40 @@ export function isValidAlias(alias: string): boolean {
   return /^[A-Za-z0-9 ]+$/.test(normalized);
 }
 
-export function deriveMatchStatus(participantCount: number, canceledAt: string | null): MatchStatus {
+export function isNoShowExpired(
+  startsAtUtc: string,
+  participantCount: number,
+  canceledAt: string | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (canceledAt || participantCount >= MAX_PLAYERS) {
+    return false;
+  }
+
+  const startsAtMs = new Date(startsAtUtc).getTime();
+  if (!Number.isFinite(startsAtMs)) {
+    return false;
+  }
+
+  return now.getTime() > startsAtMs + NO_SHOW_GRACE_MS;
+}
+
+export function deriveMatchStatus(
+  startsAtUtc: string,
+  participantCount: number,
+  canceledAt: string | null,
+  now: Date = new Date(),
+): MatchStatus {
   if (canceledAt) {
     return "cancelada";
   }
-  return participantCount >= MAX_PLAYERS ? "cerrada" : "abierta";
+  if (participantCount >= MAX_PLAYERS) {
+    return "cerrada";
+  }
+  if (isNoShowExpired(startsAtUtc, participantCount, canceledAt, now)) {
+    return "no_se_armo";
+  }
+  return "abierta";
 }
 
 export function bogotaLocalToUtcIso(localDateTime: string): string {
@@ -95,12 +126,16 @@ export function formatFeedSchedule(startsAtUtc: string, now: Date = new Date()):
   return `${dayLabel} de ${startParts.time} a ${endParts.time}`;
 }
 
-function getBogotaDateParts(now: Date): { year: string; month: string; day: string } {
+function getBogotaDateTimeParts(now: Date): { year: string; month: string; day: string; hour: string; minute: string } {
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Bogota",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    hourCycle: "h23",
   });
 
   const parts = formatter.formatToParts(now);
@@ -110,7 +145,36 @@ function getBogotaDateParts(now: Date): { year: string; month: string; day: stri
     year: byType.year,
     month: byType.month,
     day: byType.day,
+    hour: byType.hour,
+    minute: byType.minute,
   };
+}
+
+function getBogotaDateParts(now: Date): { year: string; month: string; day: string } {
+  const { year, month, day } = getBogotaDateTimeParts(now);
+  return { year, month, day };
+}
+
+export function suggestRetryStartsAtLocal(startsAtUtc: string, now: Date = new Date()): string {
+  const originalStartsAtParts = getBogotaDateTimeParts(new Date(startsAtUtc));
+  const parsedHour = Number(originalStartsAtParts.hour);
+  const targetHour = Number.isFinite(parsedHour) ? Math.max(0, Math.min(23, parsedHour)) : 20;
+
+  // Bogotá has fixed UTC-05 offset, so this keeps arithmetic deterministic.
+  const nowInBogotaMs = now.getTime() - 5 * 60 * 60 * 1000;
+  const candidate = new Date(nowInBogotaMs);
+  candidate.setUTCHours(targetHour, 0, 0, 0);
+
+  if (candidate.getTime() <= nowInBogotaMs) {
+    candidate.setUTCDate(candidate.getUTCDate() + 1);
+  }
+
+  const year = candidate.getUTCFullYear();
+  const month = String(candidate.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(candidate.getUTCDate()).padStart(2, "0");
+  const hour = String(candidate.getUTCHours()).padStart(2, "0");
+
+  return `${year}-${month}-${day}T${hour}:00`;
 }
 
 export function getOpenFeedUtcRange(window: OpenFeedWindow, now: Date = new Date()): {
@@ -215,6 +279,11 @@ export function buildWhatsAppSummary(match: MatchView, shareUrl: string, now: Da
 
   if (match.isCanceled) {
     lines.push("Cancelado");
+    lines.push(`Ver detalles: ${shareUrl}`);
+    return lines.join("\n");
+  }
+  if (match.status === "no_se_armo") {
+    lines.push("No se armó");
     lines.push(`Ver detalles: ${shareUrl}`);
     return lines.join("\n");
   }

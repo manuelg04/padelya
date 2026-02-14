@@ -8,9 +8,11 @@ import {
   getOpenFeedUtcRange,
   groupMatchesByDay,
   isFutureBogotaLocalDateTime,
+  isNoShowExpired,
   isWholeHourBogotaLocalDateTime,
   isValidAlias,
   normalizeAlias,
+  suggestRetryStartsAtLocal,
   utcIsoToBogotaParts,
 } from "@/src/domain/match";
 import type { MatchView } from "@/src/domain/types";
@@ -57,10 +59,36 @@ describe("domain/match", () => {
     expect(isValidAlias("Alias_con_guion")).toBe(false);
   });
 
-  it("derives status from participants and cancellation", () => {
-    expect(deriveMatchStatus(0, null)).toBe("abierta");
-    expect(deriveMatchStatus(4, null)).toBe("cerrada");
-    expect(deriveMatchStatus(1, new Date().toISOString())).toBe("cancelada");
+  it("derives status from participants, cancellation and no-show expiration", () => {
+    expect(deriveMatchStatus("2030-02-12T18:00:00.000Z", 0, null, new Date("2030-02-12T15:00:00.000Z"))).toBe(
+      "abierta",
+    );
+    expect(deriveMatchStatus("2030-02-12T15:00:00.000Z", 4, null, new Date("2030-02-12T16:00:00.000Z"))).toBe(
+      "cerrada",
+    );
+    expect(
+      deriveMatchStatus(
+        "2030-02-12T15:00:00.000Z",
+        1,
+        "2030-02-12T14:00:00.000Z",
+        new Date("2030-02-12T16:00:00.000Z"),
+      ),
+    ).toBe("cancelada");
+    expect(deriveMatchStatus("2030-02-12T15:00:00.000Z", 1, null, new Date("2030-02-12T15:30:00.000Z"))).toBe(
+      "abierta",
+    );
+    expect(deriveMatchStatus("2030-02-12T15:00:00.000Z", 1, null, new Date("2030-02-12T15:30:00.001Z"))).toBe(
+      "no_se_armo",
+    );
+  });
+
+  it("calculates no-show expiration with strict 30-minute boundary", () => {
+    expect(
+      isNoShowExpired("2030-02-12T15:00:00.000Z", 3, null, new Date("2030-02-12T15:30:00.000Z")),
+    ).toBe(false);
+    expect(
+      isNoShowExpired("2030-02-12T15:00:00.000Z", 3, null, new Date("2030-02-12T15:30:00.001Z")),
+    ).toBe(true);
   });
 
   it("converts datetime-local in bogota to utc and back", () => {
@@ -193,6 +221,37 @@ describe("domain/match", () => {
     expect(summary).not.toContain("Confirmados");
     expect(summary).not.toContain("Faltan");
     expect(summary).not.toContain("Únete aquí");
+  });
+
+  it("builds whatsapp summary for no-show match without join urgency", () => {
+    const match = buildMatch({
+      startsAtUtc: "2026-02-15T01:30:00.000Z",
+      status: "no_se_armo",
+      participants: [buildParticipant("u1", "Ana", "2026-01-01T00:00:00.000Z")],
+    });
+
+    const summary = buildWhatsAppSummary(match, shareUrl, summaryNow);
+
+    expect(summary).toBe(
+      [
+        "Padel CC",
+        "14/02/2026 8:30 pm · Mixto",
+        "No se armó",
+        `Ver detalles: ${shareUrl}`,
+      ].join("\n"),
+    );
+    expect(summary).not.toContain("Confirmados");
+    expect(summary).not.toContain("Faltan");
+    expect(summary).not.toContain("Únete aquí");
+  });
+
+  it("suggests retry slot in the future preserving Bogotá hour block", () => {
+    expect(suggestRetryStartsAtLocal("2030-02-12T20:00:00.000Z", new Date("2030-02-12T18:30:00.000Z"))).toBe(
+      "2030-02-12T15:00",
+    );
+    expect(suggestRetryStartsAtLocal("2030-02-12T20:00:00.000Z", new Date("2030-02-12T20:30:00.000Z"))).toBe(
+      "2030-02-13T15:00",
+    );
   });
 
   it("formats feed schedule with human labels and one-hour range", () => {

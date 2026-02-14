@@ -29,7 +29,7 @@ export type PresenceNotificationType = Extract<
   NotificationType,
   "PARTICIPANTE_SE_UNIO" | "PARTICIPANTE_SE_SALIO"
 >;
-export type MatchStatus = "abierta" | "cerrada" | "cancelada";
+export type MatchStatus = "abierta" | "cerrada" | "cancelada" | "no_se_armo";
 
 export interface UserResponse {
   id: string;

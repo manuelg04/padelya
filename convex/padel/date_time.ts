@@ -1,5 +1,7 @@
-import { PRESENCE_NOTIFICATION_COOLDOWN_MS } from "./constants";
+import { MAX_PLAYERS, PRESENCE_NOTIFICATION_COOLDOWN_MS } from "./constants";
 import type { OpenWindow, PresenceNotificationType } from "./types";
+
+export const NO_SHOW_GRACE_MS = 30 * 60 * 1000;
 
 export function nowIso(): string {
   return new Date().toISOString();
@@ -48,6 +50,24 @@ export function isFutureBogotaLocalDateTime(localDateTime: string, now: Date): b
 
   const startsAtUtc = bogotaLocalToUtcIso(localDateTime);
   return startsAtUtc > now.toISOString();
+}
+
+export function isNoShowExpired(
+  startsAtUtc: string,
+  participantCount: number,
+  canceledAt: string | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (canceledAt || participantCount >= MAX_PLAYERS) {
+    return false;
+  }
+
+  const startsAtMs = new Date(startsAtUtc).getTime();
+  if (!Number.isFinite(startsAtMs)) {
+    return false;
+  }
+
+  return now.getTime() > startsAtMs + NO_SHOW_GRACE_MS;
 }
 
 function getBogotaDateParts(now: Date): { year: string; month: string; day: string } {

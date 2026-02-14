@@ -13,6 +13,7 @@ import {
   Loader2,
   LogIn,
   MessageCircle,
+  RefreshCcw,
   Share2,
   Tag,
   UserMinus,
@@ -30,10 +31,11 @@ import { Progress } from "@/src/components/ui/progress";
 import { Separator } from "@/src/components/ui/separator";
 import { Skeleton } from "@/src/components/ui/skeleton";
 import { MAX_PLAYERS } from "@/src/domain/types";
-import { utcIsoToBogotaParts } from "@/src/domain/match";
+import { suggestRetryStartsAtLocal, utcIsoToBogotaParts } from "@/src/domain/match";
 import type { MatchView } from "@/src/domain/types";
 import {
   cancelMatch,
+  createMatch,
   followMatchWatch,
   getMatch,
   getMatchSummary,
@@ -220,6 +222,29 @@ export default function MatchDetailPage() {
   const emptySlots = match ? MAX_PLAYERS - match.participants.length : 0;
   const wantsJoinCta = searchParams.get("cta") === "join";
 
+  async function handleRetry() {
+    if (!(await guardAuth()) || !token || !match) {
+      return;
+    }
+
+    try {
+      setIsMutating(true);
+      const retryMatch = await createMatch(token, {
+        club: match.club,
+        startsAtLocal: suggestRetryStartsAtLocal(match.startsAtUtc),
+        category: match.category,
+        modality: match.modality,
+      });
+      setError(null);
+      setFeedback("Nuevo partido creado.");
+      router.push(`/partido/${retryMatch.publicId}`);
+    } catch (nextError) {
+      setError(toErrorMessage(nextError));
+    } finally {
+      setIsMutating(false);
+    }
+  }
+
   async function handleFollowWatch() {
     if (!(await guardAuth()) || !token) {
       return;
@@ -401,6 +426,16 @@ export default function MatchDetailPage() {
               </div>
             ) : null}
 
+            {!match.isCanceled && match.status === "no_se_armo" ? (
+              <div
+                className="flex items-start gap-2.5 rounded-xl bg-orange-50 p-4 text-sm text-orange-800 ring-1 ring-inset ring-orange-200"
+                data-testid="no-show-banner"
+              >
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>Este partido no se armó.</span>
+              </div>
+            ) : null}
+
             {!match.isCanceled && match.status === "cerrada" ? (
               <div className="rounded-xl bg-amber-50 px-3.5 py-3 text-sm text-amber-800 ring-1 ring-inset ring-amber-200">
                 Estado: Lleno ({MAX_PLAYERS}/{MAX_PLAYERS})
@@ -480,7 +515,7 @@ export default function MatchDetailPage() {
                 </>
               ) : null}
 
-              {!token ? (
+              {!token && !match.isCanceled && match.status !== "no_se_armo" ? (
                 <Button className="w-full" size="lg" asChild>
                   <Link href={`/login?redirect=${encodeURIComponent(pathname)}`}>
                     <LogIn className="h-4 w-4" />
@@ -508,6 +543,18 @@ export default function MatchDetailPage() {
             {match.isOrganizer && !match.isCanceled ? (
               <>
                 <Separator />
+                {match.status === "no_se_armo" ? (
+                  <Button
+                    className="w-full"
+                    variant="outline"
+                    onClick={handleRetry}
+                    disabled={isMutating}
+                    data-testid="retry-btn"
+                  >
+                    {isMutating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+                    {isMutating ? "Procesando..." : "Reintentar"}
+                  </Button>
+                ) : null}
                 <Button
                   className="w-full"
                   variant="destructive"
