@@ -9,6 +9,7 @@
  */
 
 import type * as padel from "../padel.js";
+import type * as padel_auth from "../padel/auth.js";
 import type * as padel_constants from "../padel/constants.js";
 import type * as padel_date_time from "../padel/date_time.js";
 import type * as padel_events from "../padel/events.js";
@@ -24,6 +25,10 @@ import type * as padel_types from "../padel/types.js";
 import type * as padel_users_repo from "../padel/users_repo.js";
 import type * as padel_validators from "../padel/validators.js";
 import type * as push_actions from "../push_actions.js";
+import type * as tournaments from "../tournaments.js";
+import type * as tournaments_authz from "../tournaments/authz.js";
+import type * as tournaments_repo from "../tournaments/repo.js";
+import type * as tournaments_slugs from "../tournaments/slugs.js";
 
 import type {
   ApiFromModules,
@@ -33,6 +38,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   padel: typeof padel;
+  "padel/auth": typeof padel_auth;
   "padel/constants": typeof padel_constants;
   "padel/date_time": typeof padel_date_time;
   "padel/events": typeof padel_events;
@@ -48,6 +54,10 @@ declare const fullApi: ApiFromModules<{
   "padel/users_repo": typeof padel_users_repo;
   "padel/validators": typeof padel_validators;
   push_actions: typeof push_actions;
+  tournaments: typeof tournaments;
+  "tournaments/authz": typeof tournaments_authz;
+  "tournaments/repo": typeof tournaments_repo;
+  "tournaments/slugs": typeof tournaments_slugs;
 }>;
 
 /**

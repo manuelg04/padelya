@@ -1,8 +1,7 @@
 import { nowIso } from "./date_time";
-import { ensureUser, findUserByFirebaseUid } from "./users_repo";
+import { requireOrCreateUser, requireUser } from "./auth";
 import type {
   ActivePushSubscriptionRecord,
-  ActorArgs,
   ListActivePushSubscriptionsArgs,
   PushSubscriptionDoc,
   PushSubscriptionState,
@@ -46,29 +45,18 @@ function ensureValidSubscription(input: UpsertPushSubscriptionArgs["subscription
   }
 }
 
-export async function getPushSubscriptionStateForActorHandler(
-  ctx: ReadCtx,
-  args: ActorArgs,
-): Promise<PushSubscriptionState> {
-  const user = await findUserByFirebaseUid(ctx, args.actor.firebaseUid);
-  if (!user) {
-    return {
-      enabled: false,
-      activeCount: 0,
-      updatedAt: null,
-    };
-  }
-
+export async function getPushSubscriptionStateHandler(ctx: ReadCtx): Promise<PushSubscriptionState> {
+  const user = await requireUser(ctx);
   return getPushSubscriptionStateByUser(ctx, user._id);
 }
 
-export async function upsertPushSubscriptionForActorHandler(
+export async function upsertPushSubscriptionHandler(
   ctx: WriteCtx,
   args: UpsertPushSubscriptionArgs,
 ): Promise<PushSubscriptionState> {
   ensureValidSubscription(args.subscription);
 
-  const user = await ensureUser(ctx, args.actor);
+  const user = await requireOrCreateUser(ctx);
   const now = nowIso();
   const endpoint = args.subscription.endpoint.trim();
 
@@ -104,11 +92,11 @@ export async function upsertPushSubscriptionForActorHandler(
   return getPushSubscriptionStateByUser(ctx, user._id);
 }
 
-export async function removePushSubscriptionForActorHandler(
+export async function removePushSubscriptionHandler(
   ctx: WriteCtx,
   args: RemovePushSubscriptionArgs,
 ): Promise<PushSubscriptionState> {
-  const user = await ensureUser(ctx, args.actor);
+  const user = await requireOrCreateUser(ctx);
   const now = nowIso();
   const endpoint = args.endpoint?.trim();
 

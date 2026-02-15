@@ -113,3 +113,171 @@ export interface PushSubscriptionState {
   activeCount: number;
   updatedAt: string | null;
 }
+
+export type TournamentRegistrationStatus = "pending" | "confirmed" | "waitlist" | "cancelled";
+
+export interface TournamentCategoryCounts {
+  pending: number;
+  confirmed: number;
+  waitlist: number;
+  cancelled: number;
+}
+
+export interface PublicTournamentCategorySummary {
+  id: string;
+  slug: string;
+  name: string;
+  capacity: number;
+  note: string | null;
+  counts: TournamentCategoryCounts;
+  confirmedLabel: string;
+}
+
+export interface PublicTournamentDetail {
+  tournament: {
+    id: string;
+    slug: string;
+    name: string;
+    startsAtUtc: string;
+    timezone: string;
+    description: string;
+    prizes: string | null;
+    priceInfo: string | null;
+    posterUrl: string | null;
+  };
+  club: {
+    id: string;
+    slug: string;
+    name: string;
+  };
+  categories: PublicTournamentCategorySummary[];
+}
+
+export interface TournamentMyRegistration {
+  id: string;
+  status: TournamentRegistrationStatus;
+  teamName: string;
+  partnerPhone: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PublicTournamentCategoryDetail {
+  tournament: {
+    id: string;
+    slug: string;
+    name: string;
+    startsAtUtc: string;
+    timezone: string;
+    description: string;
+    prizes: string | null;
+    priceInfo: string | null;
+    posterUrl: string | null;
+  };
+  club: {
+    id: string;
+    slug: string;
+    name: string;
+  };
+  category: {
+    id: string;
+    slug: string;
+    name: string;
+    capacity: number;
+    note: string | null;
+    counts: TournamentCategoryCounts;
+  };
+  myRegistration: TournamentMyRegistration | null;
+}
+
+export interface AdminClubMembership {
+  clubSlug: string;
+  clubName: string;
+  role: "admin" | "staff";
+  paymentInstructions: string | null;
+}
+
+export interface AdminTournamentSummary {
+  id: string;
+  slug: string;
+  name: string;
+  startsAtUtc: string;
+  timezone: string;
+  description: string;
+  categoriesCount: number;
+  categories: Array<{
+    slug: string;
+    name: string;
+    capacity: number;
+  }>;
+}
+
+export interface AdminTournamentsResponse {
+  club: {
+    slug: string;
+    name: string;
+  };
+  tournaments: AdminTournamentSummary[];
+}
+
+export interface AdminTournamentRegistrationItem {
+  id: string;
+  status: TournamentRegistrationStatus;
+  createdAt: string;
+  updatedAt: string;
+  primaryUserId: string;
+  primaryAlias: string | null;
+  primaryPhone: string | null;
+  teamName: string;
+  partnerPhone: string | null;
+}
+
+export interface AdminCategoryDashboard {
+  tournament: {
+    id: string;
+    slug: string;
+    name: string;
+    startsAtUtc: string;
+    timezone: string;
+  };
+  club: {
+    slug: string;
+    name: string;
+    paymentInstructions: string | null;
+  };
+  category: {
+    id: string;
+    slug: string;
+    name: string;
+    capacity: number;
+    note: string | null;
+    counts: TournamentCategoryCounts;
+  };
+  registrations: {
+    pending: AdminTournamentRegistrationItem[];
+    confirmed: AdminTournamentRegistrationItem[];
+    waitlist: AdminTournamentRegistrationItem[];
+    cancelled: AdminTournamentRegistrationItem[];
+  };
+}
+
+export interface CreateTournamentInput {
+  clubSlug: string;
+  name: string;
+  startsAtLocal: string;
+  timezone?: string;
+  description: string;
+  prizes?: string;
+  priceInfo?: string;
+  posterUrl?: string;
+  categories: Array<{
+    name: string;
+    capacity: number;
+    note?: string;
+  }>;
+}
+
+export interface TournamentRegistrationRequest {
+  teamName: string;
+  partnerPhone?: string;
+}

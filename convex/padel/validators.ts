@@ -12,11 +12,6 @@ export const notificationTypeValidator = v.union(
   v.literal("PARTICIPANTE_SE_SALIO"),
 );
 
-export const actorValidator = v.object({
-  firebaseUid: v.string(),
-  phoneE164: v.optional(v.string()),
-});
-
 export const createMatchInputValidator = v.object({
   club: v.string(),
   startsAtLocal: v.string(),

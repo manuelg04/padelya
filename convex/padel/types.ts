@@ -5,11 +5,6 @@ import type { UserIdentity } from "convex/server";
 export type ReadCtx = QueryCtx | MutationCtx;
 export type WriteCtx = MutationCtx;
 
-export interface ActorInput {
-  firebaseUid: string;
-  phoneE164?: string;
-}
-
 export type UserDoc = Doc<"users">;
 export type MatchDoc = Doc<"matches">;
 export type MatchParticipantDoc = Doc<"matchParticipants">;
@@ -74,11 +69,7 @@ export interface CreateMatchInput {
   modality: Modality;
 }
 
-export interface ActorArgs {
-  actor: ActorInput;
-}
-
-export interface UpdateAliasArgs extends ActorArgs {
+export interface UpdateAliasArgs {
   alias: string;
 }
 
@@ -86,16 +77,10 @@ export interface SetMyAvatarArgs {
   storageId: StorageId;
 }
 
-export interface CreateMatchArgs extends ActorArgs {
+export interface CreateMatchArgs {
   input: CreateMatchInput;
   timezone?: string;
 }
-
-export interface ListHomeArgs {
-  actor?: ActorInput;
-}
-
-export type ListMineArgs = ActorArgs;
 
 export interface ListOpenFeedArgs {
   modality?: Modality;
@@ -105,18 +90,13 @@ export interface ListOpenFeedArgs {
 
 export interface GetMatchArgs {
   publicId: string;
-  actor?: ActorInput;
 }
 
-export interface PublicIdActorArgs extends ActorArgs {
+export interface PublicIdArgs {
   publicId: string;
 }
 
 export interface ListNotificationsArgs {
-  limit?: number;
-}
-
-export interface ListNotificationsForActorArgs extends ActorArgs {
   limit?: number;
 }
 
@@ -135,11 +115,11 @@ export interface PushSubscriptionState {
   updatedAt: string | null;
 }
 
-export interface UpsertPushSubscriptionArgs extends ActorArgs {
+export interface UpsertPushSubscriptionArgs {
   subscription: PushSubscriptionPayload;
 }
 
-export interface RemovePushSubscriptionArgs extends ActorArgs {
+export interface RemovePushSubscriptionArgs {
   endpoint?: string;
   all?: boolean;
 }

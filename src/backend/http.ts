@@ -27,8 +27,8 @@ export async function resolveAuthToken(request: NextRequest): Promise<string | n
   }
 
   try {
-    const identity = await verifyFirebaseIdToken(bearer);
-    return `firebase:${identity.uid}:${encodeURIComponent(identity.phoneNumber ?? "")}`;
+    await verifyFirebaseIdToken(bearer);
+    return bearer;
   } catch {
     throw new DomainError("UNAUTHORIZED", "Token inválido.");
   }
@@ -78,6 +78,8 @@ function mapDomainCodeToStatus(code: DomainError["code"]): number {
   switch (code) {
     case "UNAUTHORIZED":
       return 401;
+    case "FORBIDDEN":
+      return 403;
     case "NOT_FOUND":
       return 404;
     case "VALIDATION_ERROR":
@@ -89,6 +91,8 @@ function mapDomainCodeToStatus(code: DomainError["code"]): number {
     case "ALREADY_JOINED":
     case "NOT_JOINED":
     case "ALIAS_REQUIRED":
+    case "TOURNAMENT_ALREADY_REGISTERED":
+    case "TOURNAMENT_CAPACITY_REACHED":
       return 400;
     default:
       return 400;

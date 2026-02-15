@@ -1,15 +1,8 @@
 import { DEFAULT_NOTIFICATION_LIMIT, MAX_NOTIFICATION_LIMIT } from "./constants";
 import { nowIso } from "./date_time";
-import { findUserByFirebaseUid, getAuthenticatedUser } from "./users_repo";
+import { requireUser } from "./auth";
 import type { QueryCtx } from "../_generated/server";
-import type {
-  ListNotificationsArgs,
-  ListNotificationsForActorArgs,
-  NotificationDoc,
-  NotificationId,
-  NotificationListItem,
-  WriteCtx,
-} from "./types";
+import type { ListNotificationsArgs, NotificationDoc, NotificationId, NotificationListItem, WriteCtx } from "./types";
 
 function toNotificationListItem(row: NotificationDoc): NotificationListItem {
   return {
@@ -32,28 +25,9 @@ export async function listNotificationsForMeHandler(
   ctx: QueryCtx,
   args: ListNotificationsArgs,
 ): Promise<NotificationListItem[]> {
-  const user = await getAuthenticatedUser(ctx);
+  const user = await requireUser(ctx);
   const limit = sanitizeLimit(args.limit);
 
-  const rows = await ctx.db
-    .query("notifications")
-    .withIndex("by_recipient_created_at", (q) => q.eq("recipientUserId", user._id))
-    .order("desc")
-    .take(limit);
-
-  return rows.map(toNotificationListItem);
-}
-
-export async function listNotificationsForActorHandler(
-  ctx: QueryCtx,
-  args: ListNotificationsForActorArgs,
-): Promise<NotificationListItem[]> {
-  const user = await findUserByFirebaseUid(ctx, args.actor.firebaseUid);
-  if (!user) {
-    return [];
-  }
-
-  const limit = sanitizeLimit(args.limit);
   const rows = await ctx.db
     .query("notifications")
     .withIndex("by_recipient_created_at", (q) => q.eq("recipientUserId", user._id))
@@ -64,7 +38,7 @@ export async function listNotificationsForActorHandler(
 }
 
 export async function unreadNotificationsCountHandler(ctx: QueryCtx): Promise<number> {
-  const user = await getAuthenticatedUser(ctx);
+  const user = await requireUser(ctx);
   const rows = await ctx.db
     .query("notifications")
     .withIndex("by_recipient_read_at", (q) => q.eq("recipientUserId", user._id))
@@ -77,7 +51,7 @@ export async function markNotificationReadHandler(
   ctx: WriteCtx,
   args: { notificationId: NotificationId },
 ): Promise<{ ok: true }> {
-  const user = await getAuthenticatedUser(ctx);
+  const user = await requireUser(ctx);
   const row = await ctx.db.get(args.notificationId);
   if (!row) {
     throw new Error("NOT_FOUND");
@@ -95,7 +69,7 @@ export async function markNotificationReadHandler(
 }
 
 export async function markAllNotificationsReadHandler(ctx: WriteCtx): Promise<{ updated: number }> {
-  const user = await getAuthenticatedUser(ctx);
+  const user = await requireUser(ctx);
   const rows = await ctx.db
     .query("notifications")
     .withIndex("by_recipient_read_at", (q) => q.eq("recipientUserId", user._id))

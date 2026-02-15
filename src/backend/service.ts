@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 
+import type { BackendPadelService } from "@/src/backend/contracts";
 import { DomainError } from "@/src/domain/errors";
 import {
   bogotaLocalToUtcIso,
@@ -13,7 +14,12 @@ import {
   utcIsoToBogotaParts,
 } from "@/src/domain/match";
 import {
+  type AdminCategoryDashboard,
+  type AdminClubMembership,
+  type AdminTournamentRegistrationItem,
+  type AdminTournamentsResponse,
   type CreateMatchInput,
+  type CreateTournamentInput,
   type EventLogRecord,
   MAX_PLAYERS,
   type MatchParticipant,
@@ -23,8 +29,12 @@ import {
   type Modality,
   type NotificationRecord,
   type OpenFeedWindow,
+  type PublicTournamentCategoryDetail,
+  type PublicTournamentDetail,
   type PushSubscriptionPayload,
   type PushSubscriptionState,
+  type TournamentRegistrationRequest,
+  type TournamentRegistrationStatus,
   type UserRecord,
 } from "@/src/domain/types";
 import { APP_TIMEZONE, USE_AUTH_EMULATOR } from "@/src/lib/env";
@@ -59,6 +69,75 @@ interface StoredPushSubscriptionRecord extends PushSubscriptionPayload {
   isActive: boolean;
 }
 
+interface ClubRecord {
+  id: string;
+  slug: string;
+  name: string;
+  paymentInstructions: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ClubMemberRecord {
+  clubId: string;
+  userId: string;
+  role: "admin" | "staff";
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface TournamentRecord {
+  id: string;
+  clubId: string;
+  slug: string;
+  name: string;
+  startsAtUtc: string;
+  timezone: string;
+  description: string;
+  prizes: string | null;
+  priceInfo: string | null;
+  posterUrl: string | null;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface TournamentCategoryRecord {
+  id: string;
+  tournamentId: string;
+  slug: string;
+  name: string;
+  capacity: number;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface TournamentTeamRecord {
+  id: string;
+  tournamentId: string;
+  categoryId: string;
+  primaryUserId: string;
+  teamName: string;
+  partnerPhone: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface TournamentRegistrationRecord {
+  id: string;
+  tournamentId: string;
+  categoryId: string;
+  teamId: string;
+  primaryUserId: string;
+  status: TournamentRegistrationStatus;
+  createdAt: string;
+  updatedAt: string;
+  cancelledAt: string | null;
+  cancelledByUserId: string | null;
+  statusChangedByUserId: string | null;
+}
+
 const WATCHER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 class AsyncLock {
@@ -85,7 +164,7 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-export class PadelService {
+export class PadelService implements BackendPadelService {
   private users = new Map<string, UserRecord>();
   private userByPhone = new Map<string, string>();
   private userByFirebaseUid = new Map<string, string>();
@@ -97,6 +176,17 @@ export class PadelService {
   private watchersByMatch = new Map<string, Map<string, MatchWatcherRecord>>();
   private notificationsByUser = new Map<string, StoredNotificationRecord[]>();
   private pushSubscriptionsByUser = new Map<string, Map<string, StoredPushSubscriptionRecord>>();
+  private clubs = new Map<string, ClubRecord>();
+  private clubBySlug = new Map<string, string>();
+  private clubMembersByClub = new Map<string, Map<string, ClubMemberRecord>>();
+  private tournaments = new Map<string, TournamentRecord>();
+  private tournamentBySlug = new Map<string, string>();
+  private categoriesByTournament = new Map<string, Map<string, TournamentCategoryRecord>>();
+  private categoryBySlug = new Map<string, Map<string, string>>();
+  private teams = new Map<string, TournamentTeamRecord>();
+  private registrations = new Map<string, TournamentRegistrationRecord>();
+  private registrationsByCategory = new Map<string, Map<string, TournamentRegistrationRecord>>();
+  private registrationsByPrimary = new Map<string, Map<string, TournamentRegistrationRecord>>();
   private locksByMatchId = new Map<string, AsyncLock>();
   private logs: EventLogRecord[] = [];
   private events = new EventEmitter();
@@ -113,6 +203,17 @@ export class PadelService {
     this.watchersByMatch.clear();
     this.notificationsByUser.clear();
     this.pushSubscriptionsByUser.clear();
+    this.clubs.clear();
+    this.clubBySlug.clear();
+    this.clubMembersByClub.clear();
+    this.tournaments.clear();
+    this.tournamentBySlug.clear();
+    this.categoriesByTournament.clear();
+    this.categoryBySlug.clear();
+    this.teams.clear();
+    this.registrations.clear();
+    this.registrationsByCategory.clear();
+    this.registrationsByPrimary.clear();
     this.locksByMatchId.clear();
     this.logs = [];
   }
@@ -606,6 +707,542 @@ export class PadelService {
     };
   }
 
+  async getTournamentBySlug(tournamentSlug: string): Promise<PublicTournamentDetail> {
+    const tournament = this.mustGetTournamentBySlug(tournamentSlug);
+    const club = this.mustGetClub(tournament.clubId);
+    const categories = this.listCategoriesForTournament(tournament.id);
+
+    return {
+      tournament: {
+        id: tournament.id,
+        slug: tournament.slug,
+        name: tournament.name,
+        startsAtUtc: tournament.startsAtUtc,
+        timezone: tournament.timezone,
+        description: tournament.description,
+        prizes: tournament.prizes,
+        priceInfo: tournament.priceInfo,
+        posterUrl: tournament.posterUrl,
+      },
+      club: {
+        id: club.id,
+        slug: club.slug,
+        name: club.name,
+      },
+      categories: categories.map((category) => {
+        const counts = this.getCategoryCounts(category.id);
+        return {
+          id: category.id,
+          slug: category.slug,
+          name: category.name,
+          capacity: category.capacity,
+          note: category.note,
+          counts,
+          confirmedLabel: `${counts.confirmed}/${category.capacity}`,
+        };
+      }),
+    };
+  }
+
+  async getTournamentCategoryBySlug(
+    tournamentSlug: string,
+    categorySlug: string,
+    token?: string,
+  ): Promise<PublicTournamentCategoryDetail> {
+    const tournament = this.mustGetTournamentBySlug(tournamentSlug);
+    const club = this.mustGetClub(tournament.clubId);
+    const category = this.mustGetCategoryBySlug(tournament.id, categorySlug);
+    const counts = this.getCategoryCounts(category.id);
+
+    let myRegistration: PublicTournamentCategoryDetail["myRegistration"] = null;
+    if (token) {
+      try {
+        const actor = this.getUserByToken(token);
+        const active = this.findActiveRegistration(category.id, actor.id);
+        if (active) {
+          const team = this.teams.get(active.teamId);
+          myRegistration = {
+            id: active.id,
+            status: active.status,
+            teamName: team?.teamName ?? "",
+            partnerPhone: team?.partnerPhone ?? null,
+            createdAt: active.createdAt,
+            updatedAt: active.updatedAt,
+          };
+        }
+      } catch {
+        myRegistration = null;
+      }
+    }
+
+    return {
+      tournament: {
+        id: tournament.id,
+        slug: tournament.slug,
+        name: tournament.name,
+        startsAtUtc: tournament.startsAtUtc,
+        timezone: tournament.timezone,
+        description: tournament.description,
+        prizes: tournament.prizes,
+        priceInfo: tournament.priceInfo,
+        posterUrl: tournament.posterUrl,
+      },
+      club: {
+        id: club.id,
+        slug: club.slug,
+        name: club.name,
+      },
+      category: {
+        id: category.id,
+        slug: category.slug,
+        name: category.name,
+        capacity: category.capacity,
+        note: category.note,
+        counts,
+      },
+      myRegistration,
+    };
+  }
+
+  async listAdminClubs(token: string): Promise<AdminClubMembership[]> {
+    const actor = this.getUserByToken(token);
+    const memberships: AdminClubMembership[] = [];
+    for (const [clubId, membersByUser] of this.clubMembersByClub.entries()) {
+      const membership = membersByUser.get(actor.id);
+      if (!membership) {
+        continue;
+      }
+      const club = this.clubs.get(clubId);
+      if (!club) {
+        continue;
+      }
+
+      memberships.push({
+        clubSlug: club.slug,
+        clubName: club.name,
+        role: membership.role,
+        paymentInstructions: club.paymentInstructions,
+      });
+    }
+
+    memberships.sort((a, b) => a.clubName.localeCompare(b.clubName));
+    return memberships;
+  }
+
+  async listAdminTournaments(token: string, clubSlug: string): Promise<AdminTournamentsResponse> {
+    const actor = this.getUserByToken(token);
+    const club = this.mustGetClubBySlug(clubSlug);
+    this.assertClubAdmin(actor.id, club.id);
+
+    const tournaments = [...this.tournaments.values()]
+      .filter((tournament) => tournament.clubId === club.id)
+      .sort((a, b) => a.startsAtUtc.localeCompare(b.startsAtUtc))
+      .map((tournament) => {
+        const categories = this.listCategoriesForTournament(tournament.id);
+        return {
+          id: tournament.id,
+          slug: tournament.slug,
+          name: tournament.name,
+          startsAtUtc: tournament.startsAtUtc,
+          timezone: tournament.timezone,
+          description: tournament.description,
+          categoriesCount: categories.length,
+          categories: categories.map((category) => ({
+            slug: category.slug,
+            name: category.name,
+            capacity: category.capacity,
+          })),
+        };
+      });
+
+    return {
+      club: {
+        slug: club.slug,
+        name: club.name,
+      },
+      tournaments,
+    };
+  }
+
+  async getAdminCategoryDashboard(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+  ): Promise<AdminCategoryDashboard> {
+    const actor = this.getUserByToken(token);
+    const tournament = this.mustGetTournamentBySlug(tournamentSlug);
+    const club = this.mustGetClub(tournament.clubId);
+    this.assertClubAdmin(actor.id, club.id);
+
+    const category = this.mustGetCategoryBySlug(tournament.id, categorySlug);
+    const counts = this.getCategoryCounts(category.id);
+    const rows = this.listRegistrationsForCategory(category.id).map((registration) => {
+      const team = this.teams.get(registration.teamId);
+      const user = this.users.get(registration.primaryUserId);
+
+      const row: AdminTournamentRegistrationItem = {
+        id: registration.id,
+        status: registration.status,
+        createdAt: registration.createdAt,
+        updatedAt: registration.updatedAt,
+        primaryUserId: registration.primaryUserId,
+        primaryAlias: user?.alias ?? null,
+        primaryPhone: user?.phoneE164 ?? null,
+        teamName: team?.teamName ?? "",
+        partnerPhone: team?.partnerPhone ?? null,
+      };
+      return row;
+    });
+
+    return {
+      tournament: {
+        id: tournament.id,
+        slug: tournament.slug,
+        name: tournament.name,
+        startsAtUtc: tournament.startsAtUtc,
+        timezone: tournament.timezone,
+      },
+      club: {
+        slug: club.slug,
+        name: club.name,
+        paymentInstructions: club.paymentInstructions,
+      },
+      category: {
+        id: category.id,
+        slug: category.slug,
+        name: category.name,
+        capacity: category.capacity,
+        note: category.note,
+        counts,
+      },
+      registrations: {
+        pending: rows.filter((row) => row.status === "pending"),
+        confirmed: rows.filter((row) => row.status === "confirmed"),
+        waitlist: rows.filter((row) => row.status === "waitlist"),
+        cancelled: rows.filter((row) => row.status === "cancelled"),
+      },
+    };
+  }
+
+  async createTournament(
+    token: string,
+    input: CreateTournamentInput,
+  ): Promise<{ tournamentSlug: string; categorySlugs: string[] }> {
+    const actor = this.getUserByToken(token);
+    const club = this.mustGetClubBySlug(input.clubSlug);
+    this.assertClubAdmin(actor.id, club.id);
+
+    if (!input.categories.length) {
+      throw new DomainError("VALIDATION_ERROR", "Debes crear al menos una categoría.");
+    }
+
+    const now = nowIso();
+    const tournamentSlug = this.makeUniqueSlug(input.name, (slug) => this.tournamentBySlug.has(slug));
+    const tournamentId = randomUUID();
+    const tournament: TournamentRecord = {
+      id: tournamentId,
+      clubId: club.id,
+      slug: tournamentSlug,
+      name: input.name.trim(),
+      startsAtUtc: bogotaLocalToUtcIso(input.startsAtLocal),
+      timezone: input.timezone?.trim() || APP_TIMEZONE,
+      description: input.description.trim(),
+      prizes: input.prizes?.trim() || null,
+      priceInfo: input.priceInfo?.trim() || null,
+      posterUrl: input.posterUrl?.trim() || null,
+      createdByUserId: actor.id,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.tournaments.set(tournamentId, tournament);
+    this.tournamentBySlug.set(tournamentSlug, tournamentId);
+    this.categoriesByTournament.set(tournamentId, new Map());
+    this.categoryBySlug.set(tournamentId, new Map());
+
+    const categorySlugs: string[] = [];
+    for (const item of input.categories) {
+      if (!Number.isInteger(item.capacity) || item.capacity <= 0) {
+        throw new DomainError("VALIDATION_ERROR", "El cupo debe ser mayor a 0.");
+      }
+
+      const categoryId = randomUUID();
+      const categorySlug = this.makeUniqueSlug(item.name, (slug) =>
+        this.categoryBySlug.get(tournamentId)?.has(slug) ?? false,
+      );
+      const category: TournamentCategoryRecord = {
+        id: categoryId,
+        tournamentId,
+        slug: categorySlug,
+        name: item.name.trim(),
+        capacity: item.capacity,
+        note: item.note?.trim() || null,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      this.categoriesByTournament.get(tournamentId)?.set(categoryId, category);
+      this.categoryBySlug.get(tournamentId)?.set(categorySlug, categoryId);
+      this.registrationsByCategory.set(categoryId, new Map());
+      categorySlugs.push(categorySlug);
+    }
+
+    return {
+      tournamentSlug,
+      categorySlugs,
+    };
+  }
+
+  async registerForCategory(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+    payload: TournamentRegistrationRequest,
+  ): Promise<{ registrationId: string; status: TournamentRegistrationStatus }> {
+    const actor = this.getUserByToken(token);
+    this.ensureAlias(actor);
+
+    const tournament = this.mustGetTournamentBySlug(tournamentSlug);
+    const category = this.mustGetCategoryBySlug(tournament.id, categorySlug);
+
+    const active = this.findActiveRegistration(category.id, actor.id);
+    if (active) {
+      throw new DomainError("TOURNAMENT_ALREADY_REGISTERED", "Ya tienes una inscripción activa en esta categoría.");
+    }
+
+    const counts = this.getCategoryCounts(category.id);
+    const status: TournamentRegistrationStatus =
+      counts.pending + counts.confirmed >= category.capacity ? "waitlist" : "pending";
+    const now = nowIso();
+
+    const teamId = randomUUID();
+    const team: TournamentTeamRecord = {
+      id: teamId,
+      tournamentId: tournament.id,
+      categoryId: category.id,
+      primaryUserId: actor.id,
+      teamName: payload.teamName.trim(),
+      partnerPhone: payload.partnerPhone?.trim() || null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.teams.set(teamId, team);
+
+    const registrationId = randomUUID();
+    const registration: TournamentRegistrationRecord = {
+      id: registrationId,
+      tournamentId: tournament.id,
+      categoryId: category.id,
+      teamId,
+      primaryUserId: actor.id,
+      status,
+      createdAt: now,
+      updatedAt: now,
+      cancelledAt: null,
+      cancelledByUserId: null,
+      statusChangedByUserId: actor.id,
+    };
+
+    this.registrations.set(registrationId, registration);
+    this.registrationsByCategory.get(category.id)?.set(registrationId, registration);
+
+    let byPrimary = this.registrationsByPrimary.get(category.id);
+    if (!byPrimary) {
+      byPrimary = new Map();
+      this.registrationsByPrimary.set(category.id, byPrimary);
+    }
+    byPrimary.set(actor.id, registration);
+
+    return {
+      registrationId,
+      status,
+    };
+  }
+
+  async cancelTournamentRegistration(
+    token: string,
+    registrationId: string,
+  ): Promise<{ registrationId: string; status: "cancelled" }> {
+    const actor = this.getUserByToken(token);
+    const registration = this.registrations.get(registrationId);
+    if (!registration) {
+      throw new DomainError("NOT_FOUND", "Inscripción no encontrada.");
+    }
+    if (registration.primaryUserId !== actor.id) {
+      throw new DomainError("FORBIDDEN", "No puedes cancelar esta inscripción.");
+    }
+
+    if (registration.status !== "cancelled") {
+      const now = nowIso();
+      const next: TournamentRegistrationRecord = {
+        ...registration,
+        status: "cancelled",
+        updatedAt: now,
+        cancelledAt: now,
+        cancelledByUserId: actor.id,
+        statusChangedByUserId: actor.id,
+      };
+      this.registrations.set(registrationId, next);
+      this.registrationsByCategory.get(registration.categoryId)?.set(registrationId, next);
+      this.registrationsByPrimary.get(registration.categoryId)?.set(actor.id, next);
+    }
+
+    return {
+      registrationId,
+      status: "cancelled",
+    };
+  }
+
+  async setTournamentRegistrationStatus(
+    token: string,
+    registrationId: string,
+    status: TournamentRegistrationStatus,
+  ): Promise<{ registrationId: string; status: TournamentRegistrationStatus }> {
+    const actor = this.getUserByToken(token);
+    const registration = this.registrations.get(registrationId);
+    if (!registration) {
+      throw new DomainError("NOT_FOUND", "Inscripción no encontrada.");
+    }
+
+    const tournament = this.tournaments.get(registration.tournamentId);
+    const category = this.findCategoryById(registration.categoryId);
+    if (!tournament || !category) {
+      throw new DomainError("NOT_FOUND", "Categoría no encontrada.");
+    }
+
+    this.assertClubAdmin(actor.id, tournament.clubId);
+
+    if (registration.status === status) {
+      return { registrationId, status };
+    }
+
+    if (status === "confirmed" && registration.status !== "confirmed") {
+      const counts = this.getCategoryCounts(category.id);
+      if (counts.confirmed >= category.capacity) {
+        throw new DomainError("TOURNAMENT_CAPACITY_REACHED", "No hay cupos para confirmar.");
+      }
+    }
+
+    if (status === "pending" && registration.status !== "pending" && registration.status !== "confirmed") {
+      const counts = this.getCategoryCounts(category.id);
+      if (counts.pending + counts.confirmed >= category.capacity) {
+        throw new DomainError("TOURNAMENT_CAPACITY_REACHED", "No hay cupos para dejar pendiente.");
+      }
+    }
+
+    const now = nowIso();
+    const next: TournamentRegistrationRecord = {
+      ...registration,
+      status,
+      updatedAt: now,
+      cancelledAt: status === "cancelled" ? now : null,
+      cancelledByUserId: status === "cancelled" ? actor.id : null,
+      statusChangedByUserId: actor.id,
+    };
+
+    this.registrations.set(registrationId, next);
+    this.registrationsByCategory.get(registration.categoryId)?.set(registrationId, next);
+    this.registrationsByPrimary.get(registration.categoryId)?.set(registration.primaryUserId, next);
+
+    return {
+      registrationId,
+      status,
+    };
+  }
+
+  async updateClubPaymentInstructions(
+    token: string,
+    clubSlug: string,
+    paymentInstructions: string,
+  ): Promise<{ ok: true }> {
+    const actor = this.getUserByToken(token);
+    const club = this.mustGetClubBySlug(clubSlug);
+    this.assertClubAdmin(actor.id, club.id);
+
+    this.clubs.set(club.id, {
+      ...club,
+      paymentInstructions: paymentInstructions.trim() || null,
+      updatedAt: nowIso(),
+    });
+
+    return { ok: true };
+  }
+
+  async seedClubAndMembers(input: {
+    clubSlug: string;
+    clubName: string;
+    adminFirebaseUids: string[];
+    staffFirebaseUids: string[];
+    seedToken: string;
+  }): Promise<{ clubSlug: string; memberCount: number }> {
+    const expectedToken = process.env.TOURNAMENTS_SEED_TOKEN ?? "test-seed-token";
+    if (input.seedToken !== expectedToken) {
+      throw new DomainError("UNAUTHORIZED", "Seed token inválido.");
+    }
+
+    const now = nowIso();
+    const normalizedSlug = this.slugify(input.clubSlug);
+    let club = this.getClubBySlug(normalizedSlug);
+    if (!club) {
+      const clubId = randomUUID();
+      club = {
+        id: clubId,
+        slug: normalizedSlug,
+        name: input.clubName.trim(),
+        paymentInstructions: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.clubs.set(clubId, club);
+      this.clubBySlug.set(normalizedSlug, clubId);
+      this.clubMembersByClub.set(clubId, new Map());
+    } else if (club.name !== input.clubName.trim()) {
+      club = {
+        ...club,
+        name: input.clubName.trim(),
+        updatedAt: now,
+      };
+      this.clubs.set(club.id, club);
+    }
+
+    const admins = new Set(input.adminFirebaseUids.map((uid) => uid.trim()).filter(Boolean));
+    const staff = new Set(input.staffFirebaseUids.map((uid) => uid.trim()).filter(Boolean));
+    const members = this.mustGetClubMembers(club.id);
+
+    let memberCount = 0;
+    for (const uid of admins) {
+      const user = this.getOrCreateUserByFirebaseUid(uid);
+      members.set(user.id, {
+        clubId: club.id,
+        userId: user.id,
+        role: "admin",
+        createdAt: now,
+        updatedAt: now,
+      });
+      memberCount += 1;
+    }
+
+    for (const uid of staff) {
+      if (admins.has(uid)) {
+        continue;
+      }
+      const user = this.getOrCreateUserByFirebaseUid(uid);
+      members.set(user.id, {
+        clubId: club.id,
+        userId: user.id,
+        role: "staff",
+        createdAt: now,
+        updatedAt: now,
+      });
+      memberCount += 1;
+    }
+
+    return {
+      clubSlug: club.slug,
+      memberCount,
+    };
+  }
+
   private getWatcherExpiresAt(startsAtUtc: string, now: string): string {
     const capByNow = new Date(new Date(now).getTime() + WATCHER_TTL_MS).toISOString();
     return startsAtUtc < capByNow ? startsAtUtc : capByNow;
@@ -747,6 +1384,174 @@ export class PadelService {
       activeCount: activeRows.length,
       updatedAt,
     };
+  }
+
+  private slugify(input: string): string {
+    const base = input
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 64);
+    return base || "item";
+  }
+
+  private makeUniqueSlug(input: string, exists: (slug: string) => boolean): string {
+    const base = this.slugify(input);
+    if (!exists(base)) {
+      return base;
+    }
+
+    for (let i = 2; i <= 1000; i += 1) {
+      const candidate = `${base}-${i}`;
+      if (!exists(candidate)) {
+        return candidate;
+      }
+    }
+
+    throw new DomainError("VALIDATION_ERROR", "No se pudo generar un slug único.");
+  }
+
+  private getOrCreateUserByFirebaseUid(firebaseUid: string): UserRecord {
+    const known = this.userByFirebaseUid.get(firebaseUid);
+    if (known) {
+      return this.mustGetUser(known);
+    }
+
+    const now = nowIso();
+    const userId = randomUUID();
+    const user: UserRecord = {
+      id: userId,
+      firebaseUid,
+      phoneE164: "",
+      alias: null,
+      avatarUrl: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.users.set(userId, user);
+    this.userByFirebaseUid.set(firebaseUid, userId);
+    return user;
+  }
+
+  private getClubBySlug(slug: string): ClubRecord | null {
+    const id = this.clubBySlug.get(slug);
+    if (!id) {
+      return null;
+    }
+    return this.clubs.get(id) ?? null;
+  }
+
+  private mustGetClubBySlug(slug: string): ClubRecord {
+    const club = this.getClubBySlug(slug);
+    if (!club) {
+      throw new DomainError("NOT_FOUND", "Club no encontrado.");
+    }
+    return club;
+  }
+
+  private mustGetClub(clubId: string): ClubRecord {
+    const club = this.clubs.get(clubId);
+    if (!club) {
+      throw new DomainError("NOT_FOUND", "Club no encontrado.");
+    }
+    return club;
+  }
+
+  private mustGetClubMembers(clubId: string): Map<string, ClubMemberRecord> {
+    let members = this.clubMembersByClub.get(clubId);
+    if (!members) {
+      members = new Map();
+      this.clubMembersByClub.set(clubId, members);
+    }
+    return members;
+  }
+
+  private assertClubAdmin(userId: string, clubId: string) {
+    const members = this.mustGetClubMembers(clubId);
+    const membership = members.get(userId);
+    if (!membership || (membership.role !== "admin" && membership.role !== "staff")) {
+      throw new DomainError("FORBIDDEN", "No tienes permisos en este club.");
+    }
+  }
+
+  private listCategoriesForTournament(tournamentId: string): TournamentCategoryRecord[] {
+    const categories = this.categoriesByTournament.get(tournamentId);
+    if (!categories) {
+      return [];
+    }
+    return [...categories.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  private mustGetTournamentBySlug(slug: string): TournamentRecord {
+    const tournamentId = this.tournamentBySlug.get(slug);
+    if (!tournamentId) {
+      throw new DomainError("NOT_FOUND", "Torneo no encontrado.");
+    }
+    const tournament = this.tournaments.get(tournamentId);
+    if (!tournament) {
+      throw new DomainError("NOT_FOUND", "Torneo no encontrado.");
+    }
+    return tournament;
+  }
+
+  private mustGetCategoryBySlug(tournamentId: string, slug: string): TournamentCategoryRecord {
+    const bySlug = this.categoryBySlug.get(tournamentId);
+    const categoryId = bySlug?.get(slug);
+    if (!categoryId) {
+      throw new DomainError("NOT_FOUND", "Categoría no encontrada.");
+    }
+    const category = this.categoriesByTournament.get(tournamentId)?.get(categoryId);
+    if (!category) {
+      throw new DomainError("NOT_FOUND", "Categoría no encontrada.");
+    }
+    return category;
+  }
+
+  private findCategoryById(categoryId: string): TournamentCategoryRecord | null {
+    for (const categories of this.categoriesByTournament.values()) {
+      const category = categories.get(categoryId);
+      if (category) {
+        return category;
+      }
+    }
+    return null;
+  }
+
+  private listRegistrationsForCategory(categoryId: string): TournamentRegistrationRecord[] {
+    const registrations = this.registrationsByCategory.get(categoryId);
+    if (!registrations) {
+      return [];
+    }
+    return [...registrations.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  private getCategoryCounts(categoryId: string): {
+    pending: number;
+    confirmed: number;
+    waitlist: number;
+    cancelled: number;
+  } {
+    const rows = this.listRegistrationsForCategory(categoryId);
+    return {
+      pending: rows.filter((row) => row.status === "pending").length,
+      confirmed: rows.filter((row) => row.status === "confirmed").length,
+      waitlist: rows.filter((row) => row.status === "waitlist").length,
+      cancelled: rows.filter((row) => row.status === "cancelled").length,
+    };
+  }
+
+  private findActiveRegistration(categoryId: string, userId: string): TournamentRegistrationRecord | null {
+    const byUser = this.registrationsByPrimary.get(categoryId);
+    const existing = byUser?.get(userId) ?? null;
+    if (!existing) {
+      return null;
+    }
+    if (existing.status === "cancelled") {
+      return null;
+    }
+    return existing;
   }
 
   private mustGetUser(userId: string): UserRecord {

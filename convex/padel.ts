@@ -14,7 +14,6 @@ import {
   unfollowMatchWatchHandler,
 } from "./padel/handlers_matches";
 import {
-  listNotificationsForActorHandler,
   listNotificationsForMeHandler,
   markAllNotificationsReadHandler,
   markNotificationReadHandler,
@@ -22,10 +21,10 @@ import {
 } from "./padel/handlers_notifications";
 import {
   disablePushSubscriptionByEndpointHandler,
-  getPushSubscriptionStateForActorHandler,
+  getPushSubscriptionStateHandler,
   listActivePushSubscriptionsForRecipientsHandler,
-  removePushSubscriptionForActorHandler,
-  upsertPushSubscriptionForActorHandler,
+  removePushSubscriptionHandler,
+  upsertPushSubscriptionHandler,
 } from "./padel/handlers_push";
 import {
   generateAvatarUploadUrlHandler,
@@ -34,18 +33,15 @@ import {
   updateAliasHandler,
   upsertUserHandler,
 } from "./padel/handlers_users";
-import { actorValidator, createMatchInputValidator, modalityValidator, openWindowValidator } from "./padel/validators";
+import { createMatchInputValidator, modalityValidator, openWindowValidator } from "./padel/validators";
 
 export const upsertUser = mutation({
-  args: {
-    actor: actorValidator,
-  },
-  handler: (ctx, args) => upsertUserHandler(ctx, args),
+  args: {},
+  handler: (ctx) => upsertUserHandler(ctx),
 });
 
 export const updateAlias = mutation({
   args: {
-    actor: actorValidator,
     alias: v.string(),
   },
   handler: (ctx, args) => updateAliasHandler(ctx, args),
@@ -70,7 +66,6 @@ export const removeMyAvatar = mutation({
 
 export const createMatch = mutation({
   args: {
-    actor: actorValidator,
     input: createMatchInputValidator,
     timezone: v.optional(v.string()),
   },
@@ -78,17 +73,13 @@ export const createMatch = mutation({
 });
 
 export const listHome = query({
-  args: {
-    actor: v.optional(actorValidator),
-  },
-  handler: (ctx, args) => listHomeHandler(ctx, args),
+  args: {},
+  handler: (ctx) => listHomeHandler(ctx),
 });
 
 export const listMine = query({
-  args: {
-    actor: actorValidator,
-  },
-  handler: (ctx, args) => listMineHandler(ctx, args),
+  args: {},
+  handler: (ctx) => listMineHandler(ctx),
 });
 
 export const listOpenFeed = query({
@@ -103,7 +94,6 @@ export const listOpenFeed = query({
 export const getMatch = query({
   args: {
     publicId: v.string(),
-    actor: v.optional(actorValidator),
   },
   handler: (ctx, args) => getMatchHandler(ctx, args),
 });
@@ -111,7 +101,6 @@ export const getMatch = query({
 export const followMatchWatch = mutation({
   args: {
     publicId: v.string(),
-    actor: actorValidator,
   },
   handler: (ctx, args) => followMatchWatchHandler(ctx, args),
 });
@@ -119,7 +108,6 @@ export const followMatchWatch = mutation({
 export const unfollowMatchWatch = mutation({
   args: {
     publicId: v.string(),
-    actor: actorValidator,
   },
   handler: (ctx, args) => unfollowMatchWatchHandler(ctx, args),
 });
@@ -127,7 +115,6 @@ export const unfollowMatchWatch = mutation({
 export const join = mutation({
   args: {
     publicId: v.string(),
-    actor: actorValidator,
   },
   handler: (ctx, args) => joinHandler(ctx, args),
 });
@@ -135,7 +122,6 @@ export const join = mutation({
 export const leave = mutation({
   args: {
     publicId: v.string(),
-    actor: actorValidator,
   },
   handler: (ctx, args) => leaveHandler(ctx, args),
 });
@@ -143,7 +129,6 @@ export const leave = mutation({
 export const cancel = mutation({
   args: {
     publicId: v.string(),
-    actor: actorValidator,
   },
   handler: (ctx, args) => cancelHandler(ctx, args),
 });
@@ -153,14 +138,6 @@ export const listNotificationsForMe = query({
     limit: v.optional(v.number()),
   },
   handler: (ctx, args) => listNotificationsForMeHandler(ctx, args),
-});
-
-export const listNotificationsForActor = query({
-  args: {
-    actor: actorValidator,
-    limit: v.optional(v.number()),
-  },
-  handler: (ctx, args) => listNotificationsForActorHandler(ctx, args),
 });
 
 export const unreadNotificationsCount = query({
@@ -181,15 +158,12 @@ export const markAllNotificationsRead = mutation({
 });
 
 export const getPushSubscriptionState = query({
-  args: {
-    actor: actorValidator,
-  },
-  handler: (ctx, args) => getPushSubscriptionStateForActorHandler(ctx, args),
+  args: {},
+  handler: (ctx) => getPushSubscriptionStateHandler(ctx),
 });
 
 export const upsertPushSubscription = mutation({
   args: {
-    actor: actorValidator,
     subscription: v.object({
       endpoint: v.string(),
       keys: v.object({
@@ -199,16 +173,15 @@ export const upsertPushSubscription = mutation({
       expirationTime: v.union(v.number(), v.null()),
     }),
   },
-  handler: (ctx, args) => upsertPushSubscriptionForActorHandler(ctx, args),
+  handler: (ctx, args) => upsertPushSubscriptionHandler(ctx, args),
 });
 
 export const removePushSubscription = mutation({
   args: {
-    actor: actorValidator,
     endpoint: v.optional(v.string()),
     all: v.optional(v.boolean()),
   },
-  handler: (ctx, args) => removePushSubscriptionForActorHandler(ctx, args),
+  handler: (ctx, args) => removePushSubscriptionHandler(ctx, args),
 });
 
 export const listActivePushSubscriptionsForRecipients = internalQuery({

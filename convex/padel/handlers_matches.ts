@@ -18,19 +18,17 @@ import {
 } from "./matches_repo";
 import { notifyManyUsers } from "./notifications_service";
 import { resolveJoinPushRecipientUserIds } from "./push_message";
-import { ensureUser, findUserByFirebaseUid } from "./users_repo";
 import { internal } from "../_generated/api";
+import { getOptionalUser, requireOrCreateUser, requireUser } from "./auth";
 import type { QueryCtx } from "../_generated/server";
 import type {
   CreateMatchArgs,
   GetMatchArgs,
-  ListHomeArgs,
-  ListMineArgs,
   ListOpenFeedArgs,
   MatchDoc,
   MatchId,
   MatchView,
-  PublicIdActorArgs,
+  PublicIdArgs,
   ReadCtx,
   WriteCtx,
 } from "./types";
@@ -57,7 +55,7 @@ async function generatePublicId(ctx: WriteCtx): Promise<string> {
 }
 
 export async function createMatchHandler(ctx: WriteCtx, args: CreateMatchArgs): Promise<MatchView> {
-  const user = await ensureUser(ctx, args.actor);
+  const user = await requireOrCreateUser(ctx);
   if (!user.alias) {
     throw new Error("ALIAS_REQUIRED");
   }
@@ -102,8 +100,8 @@ export async function createMatchHandler(ctx: WriteCtx, args: CreateMatchArgs): 
   return buildMatchView(ctx, match, user._id);
 }
 
-export async function listHomeHandler(ctx: QueryCtx, args: ListHomeArgs): Promise<MatchView[]> {
-  const actorUser = args.actor ? await findUserByFirebaseUid(ctx, args.actor.firebaseUid) : null;
+export async function listHomeHandler(ctx: QueryCtx): Promise<MatchView[]> {
+  const actorUser = await getOptionalUser(ctx);
   const actorUserId = actorUser?._id ?? null;
 
   const matches = await ctx.db.query("matches").withIndex("by_starts_at_utc").order("asc").collect();
@@ -111,11 +109,8 @@ export async function listHomeHandler(ctx: QueryCtx, args: ListHomeArgs): Promis
   return Promise.all(matches.map((match) => buildMatchView(ctx, match, actorUserId)));
 }
 
-export async function listMineHandler(ctx: QueryCtx, args: ListMineArgs): Promise<MatchView[]> {
-  const actorUser = await findUserByFirebaseUid(ctx, args.actor.firebaseUid);
-  if (!actorUser) {
-    return [];
-  }
+export async function listMineHandler(ctx: QueryCtx): Promise<MatchView[]> {
+  const actorUser = await requireUser(ctx);
 
   const participantRows = await ctx.db
     .query("matchParticipants")
@@ -179,15 +174,15 @@ export async function listOpenFeedHandler(ctx: QueryCtx, args: ListOpenFeedArgs)
 }
 
 export async function getMatchHandler(ctx: QueryCtx, args: GetMatchArgs): Promise<MatchView> {
-  const actorUser = args.actor ? await findUserByFirebaseUid(ctx, args.actor.firebaseUid) : null;
+  const actorUser = await getOptionalUser(ctx);
   const actorUserId = actorUser?._id ?? null;
 
   const match = await requireMatchByPublicId(ctx, args.publicId);
   return buildMatchView(ctx, match, actorUserId);
 }
 
-export async function followMatchWatchHandler(ctx: WriteCtx, args: PublicIdActorArgs): Promise<MatchView> {
-  const user = await ensureUser(ctx, args.actor);
+export async function followMatchWatchHandler(ctx: WriteCtx, args: PublicIdArgs): Promise<MatchView> {
+  const user = await requireOrCreateUser(ctx);
   const match = await requireMatchByPublicId(ctx, args.publicId);
 
   if (match.canceledAt) {
@@ -222,16 +217,16 @@ export async function followMatchWatchHandler(ctx: WriteCtx, args: PublicIdActor
   return buildMatchView(ctx, match, user._id);
 }
 
-export async function unfollowMatchWatchHandler(ctx: WriteCtx, args: PublicIdActorArgs): Promise<MatchView> {
-  const user = await ensureUser(ctx, args.actor);
+export async function unfollowMatchWatchHandler(ctx: WriteCtx, args: PublicIdArgs): Promise<MatchView> {
+  const user = await requireOrCreateUser(ctx);
   const match = await requireMatchByPublicId(ctx, args.publicId);
 
   await removeMatchWatcher(ctx, match._id, user._id);
   return buildMatchView(ctx, match, user._id);
 }
 
-export async function joinHandler(ctx: WriteCtx, args: PublicIdActorArgs): Promise<MatchView> {
-  const user = await ensureUser(ctx, args.actor);
+export async function joinHandler(ctx: WriteCtx, args: PublicIdArgs): Promise<MatchView> {
+  const user = await requireOrCreateUser(ctx);
   if (!user.alias) {
     throw new Error("ALIAS_REQUIRED");
   }
@@ -323,8 +318,8 @@ export async function joinHandler(ctx: WriteCtx, args: PublicIdActorArgs): Promi
   return buildMatchView(ctx, match, user._id);
 }
 
-export async function leaveHandler(ctx: WriteCtx, args: PublicIdActorArgs): Promise<MatchView> {
-  const user = await ensureUser(ctx, args.actor);
+export async function leaveHandler(ctx: WriteCtx, args: PublicIdArgs): Promise<MatchView> {
+  const user = await requireOrCreateUser(ctx);
   const match = await requireMatchByPublicId(ctx, args.publicId);
 
   if (match.canceledAt) {
@@ -412,8 +407,8 @@ export async function leaveHandler(ctx: WriteCtx, args: PublicIdActorArgs): Prom
   return buildMatchView(ctx, match, user._id);
 }
 
-export async function cancelHandler(ctx: WriteCtx, args: PublicIdActorArgs): Promise<MatchView> {
-  const user = await ensureUser(ctx, args.actor);
+export async function cancelHandler(ctx: WriteCtx, args: PublicIdArgs): Promise<MatchView> {
+  const user = await requireOrCreateUser(ctx);
   const match = await requireMatchByPublicId(ctx, args.publicId);
 
   if (match.organizerUserId !== user._id) {

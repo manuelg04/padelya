@@ -1,5 +1,5 @@
 import { nowIso } from "./date_time";
-import type { ActorInput, AuthIdentity, ReadCtx, UserDoc, WriteCtx } from "./types";
+import type { AuthIdentity, ReadCtx, UserDoc, WriteCtx } from "./types";
 
 export async function findUserByFirebaseUid(ctx: ReadCtx, firebaseUid: string): Promise<UserDoc | null> {
   return ctx.db
@@ -8,10 +8,23 @@ export async function findUserByFirebaseUid(ctx: ReadCtx, firebaseUid: string): 
     .unique();
 }
 
-export async function ensureUser(ctx: WriteCtx, actor: ActorInput): Promise<UserDoc> {
-  const existing = await findUserByFirebaseUid(ctx, actor.firebaseUid);
+export async function upsertUserFromIdentity(ctx: WriteCtx, identity: AuthIdentity): Promise<UserDoc> {
+  return upsertUserByFirebaseUid(ctx, {
+    firebaseUid: identity.subject,
+    phoneE164: identity.phoneNumber ?? "",
+  });
+}
+
+export async function upsertUserByFirebaseUid(
+  ctx: WriteCtx,
+  input: { firebaseUid: string; phoneE164?: string },
+): Promise<UserDoc> {
+  const firebaseUid = input.firebaseUid;
+  const phoneE164 = input.phoneE164 ?? "";
+  const existing = await findUserByFirebaseUid(ctx, firebaseUid);
+
   if (existing) {
-    const nextPhone = actor.phoneE164 ?? existing.phoneE164;
+    const nextPhone = phoneE164 || existing.phoneE164;
     if (nextPhone !== existing.phoneE164) {
       await ctx.db.patch(existing._id, {
         phoneE164: nextPhone,
@@ -30,8 +43,8 @@ export async function ensureUser(ctx: WriteCtx, actor: ActorInput): Promise<User
 
   const now = nowIso();
   const id = await ctx.db.insert("users", {
-    firebaseUid: actor.firebaseUid,
-    phoneE164: actor.phoneE164 ?? "",
+    firebaseUid,
+    phoneE164,
     createdAt: now,
     updatedAt: now,
   });
@@ -51,13 +64,6 @@ export async function getRequiredIdentity(ctx: ReadCtx): Promise<AuthIdentity> {
   }
 
   return identity;
-}
-
-export async function ensureUserFromIdentity(ctx: WriteCtx, identity: AuthIdentity): Promise<UserDoc> {
-  return ensureUser(ctx, {
-    firebaseUid: identity.subject,
-    phoneE164: identity.phoneNumber ?? "",
-  });
 }
 
 export async function getAuthenticatedUser(ctx: ReadCtx): Promise<UserDoc> {

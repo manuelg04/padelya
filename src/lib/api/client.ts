@@ -1,11 +1,19 @@
 import type {
+  AdminCategoryDashboard,
+  AdminClubMembership,
+  AdminTournamentsResponse,
   CreateMatchInput,
+  CreateTournamentInput,
   MatchView,
   Modality,
   NotificationRecord,
   OpenFeedWindow,
+  PublicTournamentCategoryDetail,
+  PublicTournamentDetail,
   PushSubscriptionPayload,
   PushSubscriptionState,
+  TournamentRegistrationRequest,
+  TournamentRegistrationStatus,
   UserRecord,
 } from "@/src/domain/types";
 
@@ -208,6 +216,189 @@ export async function unfollowMatchWatch(publicId: string, token: string): Promi
   });
   const payload = await parseJson<{ match: MatchView }>(response);
   return payload.match;
+}
+
+export async function getTournamentBySlug(
+  tournamentSlug: string,
+  token?: string,
+): Promise<PublicTournamentDetail> {
+  const response = await fetch(`/api/tournaments/${encodeURIComponent(tournamentSlug)}`, {
+    headers: {
+      ...authHeaders(token),
+    },
+    cache: "no-store",
+  });
+  const payload = await parseJson<{ tournament: PublicTournamentDetail }>(response);
+  return payload.tournament;
+}
+
+export async function getTournamentCategoryBySlug(
+  tournamentSlug: string,
+  categorySlug: string,
+  token?: string,
+): Promise<PublicTournamentCategoryDetail> {
+  const response = await fetch(
+    `/api/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}`,
+    {
+      headers: {
+        ...authHeaders(token),
+      },
+      cache: "no-store",
+    },
+  );
+  const payload = await parseJson<{ category: PublicTournamentCategoryDetail }>(response);
+  return payload.category;
+}
+
+export async function registerForTournamentCategory(
+  token: string,
+  tournamentSlug: string,
+  categorySlug: string,
+  payload: TournamentRegistrationRequest,
+): Promise<{ registrationId: string; status: TournamentRegistrationStatus }> {
+  const response = await fetch(
+    `/api/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}/registrations`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(token),
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+  return parseJson(response);
+}
+
+export async function cancelTournamentRegistration(
+  token: string,
+  registrationId: string,
+): Promise<{ registrationId: string; status: "cancelled" }> {
+  const response = await fetch(
+    `/api/tournaments/registrations/${encodeURIComponent(registrationId)}/cancel`,
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders(token),
+      },
+    },
+  );
+  return parseJson(response);
+}
+
+export async function listAdminTournamentClubs(token: string): Promise<AdminClubMembership[]> {
+  const response = await fetch("/api/admin/tournaments/clubs", {
+    headers: {
+      ...authHeaders(token),
+    },
+    cache: "no-store",
+  });
+  const payload = await parseJson<{ clubs: AdminClubMembership[] }>(response);
+  return payload.clubs;
+}
+
+export async function listAdminTournaments(
+  token: string,
+  clubSlug: string,
+): Promise<AdminTournamentsResponse> {
+  const params = new URLSearchParams({ clubSlug });
+  const response = await fetch(`/api/admin/tournaments?${params.toString()}`, {
+    headers: {
+      ...authHeaders(token),
+    },
+    cache: "no-store",
+  });
+  return parseJson(response);
+}
+
+export async function createTournament(
+  token: string,
+  input: CreateTournamentInput,
+): Promise<{ tournamentSlug: string; categorySlugs: string[] }> {
+  const response = await fetch("/api/admin/tournaments", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(token),
+    },
+    body: JSON.stringify(input),
+  });
+  return parseJson(response);
+}
+
+export async function getAdminTournamentCategoryDashboard(
+  token: string,
+  tournamentSlug: string,
+  categorySlug: string,
+): Promise<AdminCategoryDashboard> {
+  const response = await fetch(
+    `/api/admin/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}/registrations`,
+    {
+      headers: {
+        ...authHeaders(token),
+      },
+      cache: "no-store",
+    },
+  );
+  const payload = await parseJson<{ dashboard: AdminCategoryDashboard }>(response);
+  return payload.dashboard;
+}
+
+export async function setAdminTournamentRegistrationStatus(
+  token: string,
+  registrationId: string,
+  status: TournamentRegistrationStatus,
+): Promise<{ registrationId: string; status: TournamentRegistrationStatus }> {
+  const response = await fetch(
+    `/api/admin/tournaments/registrations/${encodeURIComponent(registrationId)}/status`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(token),
+      },
+      body: JSON.stringify({ status }),
+    },
+  );
+  return parseJson(response);
+}
+
+export async function updateAdminClubPaymentInstructions(
+  token: string,
+  clubSlug: string,
+  paymentInstructions: string,
+): Promise<{ ok: true }> {
+  const response = await fetch(`/api/admin/clubs/${encodeURIComponent(clubSlug)}/payment-instructions`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(token),
+    },
+    body: JSON.stringify({ paymentInstructions }),
+  });
+  return parseJson(response);
+}
+
+export async function seedClubAdminForTests(input: {
+  token?: string;
+  clubSlug: string;
+  clubName: string;
+  seedToken: string;
+}): Promise<{ ok: boolean }> {
+  const response = await fetch("/api/test/seed-club-admin", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(input.token),
+    },
+    body: JSON.stringify({
+      clubSlug: input.clubSlug,
+      clubName: input.clubName,
+      seedToken: input.seedToken,
+    }),
+  });
+  const payload = await parseJson<{ ok: boolean }>(response);
+  return payload;
 }
 
 export async function listNotifications(token: string, limit = 50): Promise<NotificationRecord[]> {

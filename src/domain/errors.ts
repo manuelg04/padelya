@@ -6,10 +6,13 @@ export type DomainErrorCode =
   | "NOT_JOINED"
   | "ALIAS_REQUIRED"
   | "UNAUTHORIZED"
+  | "FORBIDDEN"
   | "NOT_FOUND"
   | "VALIDATION_ERROR"
   | "OTP_INVALID"
-  | "OTP_EXPIRED";
+  | "OTP_EXPIRED"
+  | "TOURNAMENT_ALREADY_REGISTERED"
+  | "TOURNAMENT_CAPACITY_REACHED";
 
 export class DomainError extends Error {
   constructor(
