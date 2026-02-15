@@ -51,6 +51,8 @@ function CategoryContent({
   data,
   onRegister,
   onCancel,
+  isAuthenticated,
+  hasAlias,
   teamName,
   setTeamName,
   partnerPhone,
@@ -62,6 +64,8 @@ function CategoryContent({
   data: PublicTournamentCategoryDetail;
   onRegister: () => Promise<void>;
   onCancel: () => Promise<void>;
+  isAuthenticated: boolean;
+  hasAlias: boolean;
   teamName: string;
   setTeamName: (value: string) => void;
   partnerPhone: string;
@@ -71,7 +75,9 @@ function CategoryContent({
   error: string | null;
 }) {
   const categoryClosed = Boolean(data.groupStage);
-  const canRegister = !data.myRegistration && !categoryClosed;
+  const canRegister = !data.myRegistration && !categoryClosed && isAuthenticated && hasAlias;
+  const canStartRegistration = !data.myRegistration && !categoryClosed && !isAuthenticated;
+  const mustCompleteProfile = !data.myRegistration && !categoryClosed && isAuthenticated && !hasAlias;
 
   return (
     <AppShell>
@@ -236,6 +242,34 @@ function CategoryContent({
           </Card>
         ) : null}
 
+        {canStartRegistration ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Inscribirme en esta categoría</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-zinc-600">Inicia sesión para completar la inscripción de tu pareja.</p>
+              <Button className="w-full" onClick={() => void onRegister()} disabled={isSubmitting}>
+                Iniciar sesión para inscribirme
+              </Button>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {mustCompleteProfile ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Inscribirme en esta categoría</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-zinc-600">Completa tu alias para continuar con la inscripción.</p>
+              <Button className="w-full" onClick={() => void onRegister()} disabled={isSubmitting}>
+                Completar perfil para inscribirme
+              </Button>
+            </CardContent>
+          </Card>
+        ) : null}
+
         {canRegister ? (
           <Card>
             <CardHeader>
@@ -359,6 +393,7 @@ function ConvexTournamentCategoryPage() {
   const params = useParams<{ tournamentSlug: string; categorySlug: string }>();
   const tournamentSlug = decodeURIComponent(params.tournamentSlug ?? "");
   const categorySlug = decodeURIComponent(params.categorySlug ?? "");
+  const { token, user } = useAuth();
 
   const data = useQuery(api.tournaments.getTournamentCategoryBySlug, {
     tournamentSlug,
@@ -383,6 +418,8 @@ function ConvexTournamentCategoryPage() {
       data={data}
       onRegister={actions.handleRegister}
       onCancel={actions.handleCancel}
+      isAuthenticated={Boolean(token)}
+      hasAlias={Boolean(user?.alias)}
       teamName={actions.teamName}
       setTeamName={actions.setTeamName}
       partnerPhone={actions.partnerPhone}
@@ -398,7 +435,7 @@ function MockTournamentCategoryPage() {
   const params = useParams<{ tournamentSlug: string; categorySlug: string }>();
   const tournamentSlug = decodeURIComponent(params.tournamentSlug ?? "");
   const categorySlug = decodeURIComponent(params.categorySlug ?? "");
-  const { token } = useAuth();
+  const { token, user } = useAuth();
 
   const [data, setData] = useState<PublicTournamentCategoryDetail | null>(null);
   const [errorState, setErrorState] = useState<string | null>(null);
@@ -456,6 +493,8 @@ function MockTournamentCategoryPage() {
       data={data}
       onRegister={actions.handleRegister}
       onCancel={actions.handleCancel}
+      isAuthenticated={Boolean(token)}
+      hasAlias={Boolean(user?.alias)}
       teamName={actions.teamName}
       setTeamName={actions.setTeamName}
       partnerPhone={actions.partnerPhone}

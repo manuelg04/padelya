@@ -76,8 +76,7 @@ test("happy path torneo por link: otp + inscripción + confirmación admin", asy
   await page.goto(`/torneos/${tournamentSlug}/categorias/${categorySlug}`);
   await expect(page.getByRole("heading", { name: "Mixto Iniciación" })).toBeVisible();
 
-  await page.getByLabel("Nombre de pareja").fill("Jugadora 1 / Jugadora 2");
-  await page.getByRole("button", { name: "Solicitar cupo" }).click();
+  await page.getByRole("button", { name: "Iniciar sesión para inscribirme" }).click();
 
   await expect(page).toHaveURL(/\/login\?/);
   await completeAuth(page, "3009000002", "Jugadora Link");
