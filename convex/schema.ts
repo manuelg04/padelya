@@ -198,7 +198,18 @@ export default defineSchema({
     order: v.number(),
     teamAId: v.id("tournamentTeams"),
     teamBId: v.id("tournamentTeams"),
-    status: v.union(v.literal("pending")),
+    status: v.union(v.literal("pending"), v.literal("completed")),
+    winnerTeamId: v.optional(v.id("tournamentTeams")),
+    sets: v.optional(
+      v.array(
+        v.object({
+          teamAGames: v.number(),
+          teamBGames: v.number(),
+        }),
+      ),
+    ),
+    reportedAt: v.optional(v.string()),
+    reportedByUserId: v.optional(v.id("users")),
     createdByUserId: v.id("users"),
     createdAt: v.string(),
     updatedAt: v.string(),

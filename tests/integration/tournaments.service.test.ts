@@ -217,4 +217,167 @@ describe("PadelService tournaments", () => {
       code: "TOURNAMENT_CATEGORY_FROZEN",
     });
   });
+
+  it("reports and edits group results with standings + qualified teams derived at runtime", async () => {
+    const admin = await createUser(service, "+573110001061", "Admin");
+
+    await service.seedClubAndMembers({
+      clubSlug: "smash-club",
+      clubName: "Smash Club",
+      adminFirebaseUids: [admin.firebaseUid],
+      staffFirebaseUids: [],
+      seedToken: "test-seed-token",
+    });
+
+    const created = await service.createTournament(admin.token, {
+      clubSlug: "smash-club",
+      name: "Torneo Resultados",
+      startsAtLocal: "2030-02-01T18:00",
+      description: "Desc",
+      categories: [{ name: "Mixto", capacity: 8 }],
+    });
+    const categorySlug = created.categorySlugs[0]!;
+
+    for (let index = 1; index <= 8; index += 1) {
+      const player = await createUser(service, `+57311000107${index}`, `Player${index}`);
+      const registration = await service.registerForCategory(player.token, created.tournamentSlug, categorySlug, {
+        teamName: `Team${index}`,
+      });
+      await service.setTournamentRegistrationStatus(admin.token, registration.registrationId, "confirmed");
+    }
+
+    await service.generateTournamentGroups(admin.token, created.tournamentSlug, categorySlug);
+    await service.generateTournamentGroupMatches(admin.token, created.tournamentSlug, categorySlug);
+
+    const before = await service.getTournamentCategoryBySlug(created.tournamentSlug, categorySlug, admin.token);
+    const firstMatch = before.groupStage?.matchesByGroup[0]?.matches[0];
+    const firstGroup = before.groupStage?.groups[0];
+    expect(firstMatch && firstGroup).toBeTruthy();
+
+    await service.reportTournamentGroupMatchResult(
+      admin.token,
+      created.tournamentSlug,
+      categorySlug,
+      firstMatch!.id,
+      {
+        winnerTeamId: firstMatch!.teamA.id,
+        sets: [
+          { teamAGames: 6, teamBGames: 4 },
+          { teamAGames: 6, teamBGames: 3 },
+        ],
+      },
+    );
+
+    const afterFirst = await service.getTournamentCategoryBySlug(created.tournamentSlug, categorySlug, admin.token);
+    const firstMatchAfterReport = afterFirst.groupStage?.matchesByGroup[0]?.matches.find((match) => match.id === firstMatch!.id);
+    expect(firstMatchAfterReport?.status).toBe("completed");
+    expect(firstMatchAfterReport?.result?.winnerTeamId).toBe(firstMatch!.teamA.id);
+
+    await service.reportTournamentGroupMatchResult(
+      admin.token,
+      created.tournamentSlug,
+      categorySlug,
+      firstMatch!.id,
+      {
+        winnerTeamId: firstMatch!.teamB.id,
+        sets: [
+          { teamAGames: 4, teamBGames: 6 },
+          { teamAGames: 3, teamBGames: 6 },
+        ],
+      },
+    );
+
+    const afterEdit = await service.getTournamentCategoryBySlug(created.tournamentSlug, categorySlug, admin.token);
+    const firstMatchAfterEdit = afterEdit.groupStage?.matchesByGroup[0]?.matches.find((match) => match.id === firstMatch!.id);
+    expect(firstMatchAfterEdit?.result?.winnerTeamId).toBe(firstMatch!.teamB.id);
+
+    await expect(
+      service.reportTournamentGroupMatchResult(
+        admin.token,
+        created.tournamentSlug,
+        categorySlug,
+        firstMatch!.id,
+        {
+          winnerTeamId: firstMatch!.teamA.id,
+          sets: [
+            { teamAGames: 6, teamBGames: 6 },
+            { teamAGames: 6, teamBGames: 4 },
+          ],
+        },
+      ),
+    ).rejects.toMatchObject<DomainError>({
+      code: "VALIDATION_ERROR",
+    });
+
+    const outsider = await createUser(service, "+573110001079", "Outsider");
+    await expect(
+      service.reportTournamentGroupMatchResult(
+        outsider.token,
+        created.tournamentSlug,
+        categorySlug,
+        firstMatch!.id,
+        {
+          winnerTeamId: firstMatch!.teamA.id,
+          sets: [
+            { teamAGames: 6, teamBGames: 4 },
+            { teamAGames: 6, teamBGames: 4 },
+          ],
+        },
+      ),
+    ).rejects.toMatchObject<DomainError>({
+      code: "FORBIDDEN",
+    });
+
+    const refreshed = await service.getTournamentCategoryBySlug(created.tournamentSlug, categorySlug, admin.token);
+    const refreshedGroup = refreshed.groupStage?.groups[0];
+    const refreshedMatches = refreshed.groupStage?.matchesByGroup[0]?.matches ?? [];
+    expect(refreshedGroup).toBeTruthy();
+
+    const teamsInOrder = refreshedGroup!.teams.map((team) => team.id);
+    const [team1, team2, team3, team4] = teamsInOrder;
+    const keyForPair = (a: string, b: string) => [a, b].sort().join("|");
+    const winnerByPair = new Map<string, string>([
+      [keyForPair(team1!, team2!), team1!],
+      [keyForPair(team1!, team3!), team1!],
+      [keyForPair(team1!, team4!), team1!],
+      [keyForPair(team2!, team3!), team2!],
+      [keyForPair(team2!, team4!), team2!],
+      [keyForPair(team3!, team4!), team3!],
+    ]);
+
+    for (const match of refreshedMatches) {
+      const winnerTeamId = winnerByPair.get(keyForPair(match.teamA.id, match.teamB.id));
+      expect(winnerTeamId).toBeTruthy();
+
+      const winnerIsTeamA = winnerTeamId === match.teamA.id;
+      await service.reportTournamentGroupMatchResult(
+        admin.token,
+        created.tournamentSlug,
+        categorySlug,
+        match.id,
+        {
+          winnerTeamId: winnerTeamId!,
+          sets: winnerIsTeamA
+            ? [
+                { teamAGames: 6, teamBGames: 4 },
+                { teamAGames: 6, teamBGames: 3 },
+              ]
+            : [
+                { teamAGames: 4, teamBGames: 6 },
+                { teamAGames: 3, teamBGames: 6 },
+              ],
+        },
+      );
+    }
+
+    const finalDetail = await service.getTournamentCategoryBySlug(created.tournamentSlug, categorySlug, admin.token);
+    const firstStanding = finalDetail.groupStage?.standingsByGroup.find((standing) => standing.groupId === refreshedGroup!.id);
+    expect(firstStanding).toBeTruthy();
+    expect(firstStanding?.rows[0]?.team.id).toBe(team1);
+    expect(firstStanding?.rows[1]?.team.id).toBe(team2);
+    expect(firstStanding?.rows[0]?.qualified).toBe(true);
+    expect(firstStanding?.rows[1]?.qualified).toBe(true);
+    expect(firstStanding?.hasUnresolvedTieAtQualificationCutoff).toBe(false);
+    expect(finalDetail.groupStage?.qualifiedTeams.length).toBe(4);
+  });
 });

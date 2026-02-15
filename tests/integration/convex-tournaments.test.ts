@@ -302,4 +302,188 @@ describe("Convex tournaments", () => {
       }),
     ).rejects.toThrow(/TOURNAMENT_CATEGORY_FROZEN/);
   });
+
+  it("reports and edits group results with standings + qualified teams derived at runtime", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.mutation(api.tournaments.seedClubAndMembers, {
+      clubSlug: "smash-club",
+      clubName: "Smash Club",
+      adminFirebaseUids: ["admin-uid"],
+      staffFirebaseUids: [],
+      seedToken: "test-seed-token",
+    });
+
+    const admin = t.withIdentity({ subject: "admin-uid", phoneNumber: "+573001000001" });
+    await admin.mutation(api.padel.upsertUser, {});
+    await admin.mutation(api.padel.updateAlias, { alias: "Admin" });
+
+    const created = await admin.mutation(api.tournaments.createTournament, {
+      clubSlug: "smash-club",
+      name: "Torneo Resultados",
+      startsAtLocal: "2030-02-01T18:00",
+      description: "x",
+      categories: [{ name: "Cat", capacity: 8 }],
+    });
+    const categorySlug = created.categorySlugs[0]!;
+
+    for (let index = 1; index <= 8; index += 1) {
+      const player = t.withIdentity({ subject: `p${index}`, phoneNumber: `+57300130010${index}` });
+      await player.mutation(api.padel.upsertUser, {});
+      await player.mutation(api.padel.updateAlias, { alias: `Play${index}` });
+      const registration = await player.mutation(api.tournaments.registerForCategory, {
+        tournamentSlug: created.tournamentSlug,
+        categorySlug,
+        teamName: `Team${index}`,
+      });
+      await admin.mutation(api.tournaments.setRegistrationStatus, {
+        registrationId: registration.registrationId as Id<"tournamentRegistrations">,
+        status: "confirmed",
+      });
+    }
+
+    await admin.mutation(api.tournaments.generateCategoryGroups, {
+      tournamentSlug: created.tournamentSlug,
+      categorySlug,
+    });
+    await admin.mutation(api.tournaments.generateCategoryGroupMatches, {
+      tournamentSlug: created.tournamentSlug,
+      categorySlug,
+    });
+
+    const before = await admin.query(api.tournaments.getTournamentCategoryBySlug, {
+      tournamentSlug: created.tournamentSlug,
+      categorySlug,
+    });
+    const firstGroup = before.groupStage?.groups[0];
+    const firstGroupMatches = before.groupStage?.matchesByGroup[0]?.matches ?? [];
+    const firstMatch = firstGroupMatches[0];
+    expect(firstGroup && firstMatch).toBeTruthy();
+
+    await admin.mutation(api.tournaments.reportCategoryGroupMatchResult, {
+      tournamentSlug: created.tournamentSlug,
+      categorySlug,
+      matchId: firstMatch!.id as Id<"tournamentMatches">,
+      winnerTeamId: firstMatch!.teamA.id as Id<"tournamentTeams">,
+      sets: [
+        { teamAGames: 6, teamBGames: 4 },
+        { teamAGames: 6, teamBGames: 3 },
+      ],
+    });
+
+    const afterFirstReport = await admin.query(api.tournaments.getTournamentCategoryBySlug, {
+      tournamentSlug: created.tournamentSlug,
+      categorySlug,
+    });
+    const firstMatchAfterReport = afterFirstReport.groupStage?.matchesByGroup[0]?.matches.find(
+      (match) => match.id === firstMatch!.id,
+    );
+    expect(firstMatchAfterReport?.status).toBe("completed");
+    expect(firstMatchAfterReport?.result?.winnerTeamId).toBe(firstMatch!.teamA.id);
+
+    await admin.mutation(api.tournaments.reportCategoryGroupMatchResult, {
+      tournamentSlug: created.tournamentSlug,
+      categorySlug,
+      matchId: firstMatch!.id as Id<"tournamentMatches">,
+      winnerTeamId: firstMatch!.teamB.id as Id<"tournamentTeams">,
+      sets: [
+        { teamAGames: 4, teamBGames: 6 },
+        { teamAGames: 3, teamBGames: 6 },
+      ],
+    });
+
+    const afterEdit = await admin.query(api.tournaments.getTournamentCategoryBySlug, {
+      tournamentSlug: created.tournamentSlug,
+      categorySlug,
+    });
+    const firstMatchAfterEdit = afterEdit.groupStage?.matchesByGroup[0]?.matches.find((match) => match.id === firstMatch!.id);
+    expect(firstMatchAfterEdit?.result?.winnerTeamId).toBe(firstMatch!.teamB.id);
+
+    await expect(
+      admin.mutation(api.tournaments.reportCategoryGroupMatchResult, {
+        tournamentSlug: created.tournamentSlug,
+        categorySlug,
+        matchId: firstMatch!.id as Id<"tournamentMatches">,
+        winnerTeamId: firstMatch!.teamA.id as Id<"tournamentTeams">,
+        sets: [
+          { teamAGames: 6, teamBGames: 6 },
+          { teamAGames: 6, teamBGames: 4 },
+        ],
+      }),
+    ).rejects.toThrow(/VALIDATION_ERROR/);
+
+    const outsider = t.withIdentity({ subject: "outsider", phoneNumber: "+573001300999" });
+    await outsider.mutation(api.padel.upsertUser, {});
+    await outsider.mutation(api.padel.updateAlias, { alias: "Outsider" });
+
+    await expect(
+      outsider.mutation(api.tournaments.reportCategoryGroupMatchResult, {
+        tournamentSlug: created.tournamentSlug,
+        categorySlug,
+        matchId: firstMatch!.id as Id<"tournamentMatches">,
+        winnerTeamId: firstMatch!.teamA.id as Id<"tournamentTeams">,
+        sets: [
+          { teamAGames: 6, teamBGames: 4 },
+          { teamAGames: 6, teamBGames: 4 },
+        ],
+      }),
+    ).rejects.toThrow(/FORBIDDEN/);
+
+    const refreshed = await admin.query(api.tournaments.getTournamentCategoryBySlug, {
+      tournamentSlug: created.tournamentSlug,
+      categorySlug,
+    });
+    const refreshedGroup = refreshed.groupStage?.groups[0];
+    const refreshedMatches = refreshed.groupStage?.matchesByGroup[0]?.matches ?? [];
+    expect(refreshedGroup).toBeTruthy();
+
+    const teamsInOrder = refreshedGroup!.teams.map((team) => team.id);
+    const [team1, team2, team3, team4] = teamsInOrder;
+    const keyForPair = (a: string, b: string) => [a, b].sort().join("|");
+    const winnerByPair = new Map<string, string>([
+      [keyForPair(team1!, team2!), team1!],
+      [keyForPair(team1!, team3!), team1!],
+      [keyForPair(team1!, team4!), team1!],
+      [keyForPair(team2!, team3!), team2!],
+      [keyForPair(team2!, team4!), team2!],
+      [keyForPair(team3!, team4!), team3!],
+    ]);
+
+    for (const match of refreshedMatches) {
+      const winnerTeamId = winnerByPair.get(keyForPair(match.teamA.id, match.teamB.id));
+      expect(winnerTeamId).toBeTruthy();
+
+      const winnerIsTeamA = winnerTeamId === match.teamA.id;
+      await admin.mutation(api.tournaments.reportCategoryGroupMatchResult, {
+        tournamentSlug: created.tournamentSlug,
+        categorySlug,
+        matchId: match.id as Id<"tournamentMatches">,
+        winnerTeamId: winnerTeamId as Id<"tournamentTeams">,
+        sets: winnerIsTeamA
+          ? [
+              { teamAGames: 6, teamBGames: 4 },
+              { teamAGames: 6, teamBGames: 3 },
+            ]
+          : [
+              { teamAGames: 4, teamBGames: 6 },
+              { teamAGames: 3, teamBGames: 6 },
+            ],
+      });
+    }
+
+    const finalDetail = await admin.query(api.tournaments.getTournamentCategoryBySlug, {
+      tournamentSlug: created.tournamentSlug,
+      categorySlug,
+    });
+    const firstStanding = finalDetail.groupStage?.standingsByGroup.find(
+      (standing) => standing.groupId === refreshedGroup!.id,
+    );
+    expect(firstStanding).toBeTruthy();
+    expect(firstStanding?.rows[0]?.team.id).toBe(team1);
+    expect(firstStanding?.rows[1]?.team.id).toBe(team2);
+    expect(firstStanding?.rows[0]?.qualified).toBe(true);
+    expect(firstStanding?.rows[1]?.qualified).toBe(true);
+    expect(firstStanding?.hasUnresolvedTieAtQualificationCutoff).toBe(false);
+    expect(finalDetail.groupStage?.qualifiedTeams.length).toBe(4);
+  });
 });

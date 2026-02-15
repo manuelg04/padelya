@@ -18,13 +18,19 @@ import {
   buildCategoryReminderMessage,
   buildTournamentCategoryUrl,
 } from "@/src/domain/tournament";
-import type { AdminCategoryDashboard, PublicTournamentCategoryDetail, TournamentRegistrationStatus } from "@/src/domain/types";
+import type {
+  AdminCategoryDashboard,
+  PublicTournamentCategoryDetail,
+  TournamentRegistrationStatus,
+  TournamentSetScore,
+} from "@/src/domain/types";
 import {
   generateAdminTournamentGroupMatches,
   generateAdminTournamentGroups,
   getAdminTournamentCategoryDashboard,
   getTournamentCategoryBySlug,
   moveAdminTournamentTeamGroup,
+  reportAdminTournamentGroupMatchResult,
   setAdminTournamentRegistrationStatus,
   updateAdminClubPaymentInstructions,
 } from "@/src/lib/api/client";
@@ -45,6 +51,151 @@ function groupsReadyForFixture(categoryDetail: PublicTournamentCategoryDetail): 
   return stage.groups.length > 0 && stage.groups.every((group) => group.teams.length === 4);
 }
 
+type GroupMatchView = NonNullable<PublicTournamentCategoryDetail["groupStage"]>["matchesByGroup"][number]["matches"][number];
+
+function buildEditableSets(match: GroupMatchView): Array<{ teamAGames: string; teamBGames: string }> {
+  const source = match.result?.sets ?? [];
+  return [0, 1, 2].map((index) => ({
+    teamAGames: source[index] ? String(source[index].teamAGames) : "",
+    teamBGames: source[index] ? String(source[index].teamBGames) : "",
+  }));
+}
+
+function formatMatchResult(match: GroupMatchView): string {
+  if (!match.result) {
+    return "Pendiente";
+  }
+  return `${match.result.sets.map((set) => `${set.teamAGames}-${set.teamBGames}`).join(" / ")}`;
+}
+
+function MatchResultEditor({
+  match,
+  onSave,
+  isSubmitting,
+}: {
+  match: GroupMatchView;
+  onSave: (matchId: string, payload: { winnerTeamId: string; sets: TournamentSetScore[] }) => Promise<void>;
+  isSubmitting: boolean;
+}) {
+  const [winnerTeamId, setWinnerTeamId] = useState(match.result?.winnerTeamId ?? match.teamA.id);
+  const [sets, setSets] = useState<Array<{ teamAGames: string; teamBGames: string }>>(() => buildEditableSets(match));
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  const updateSetField = useCallback(
+    (index: number, side: "teamAGames" | "teamBGames", value: string) => {
+      setSets((current) =>
+        current.map((item, itemIndex) =>
+          itemIndex === index
+            ? {
+                ...item,
+                [side]: value,
+              }
+            : item,
+        ),
+      );
+    },
+    [],
+  );
+
+  const handleSave = useCallback(async () => {
+    const firstTwo = sets.slice(0, 2);
+    if (firstTwo.some((set) => !set.teamAGames.trim() || !set.teamBGames.trim())) {
+      setLocalError("Debes completar al menos 2 sets.");
+      return;
+    }
+
+    const candidateSets = sets
+      .slice(0, 3)
+      .filter(
+        (set, index) =>
+          index < 2 || Boolean(set.teamAGames.trim()) || Boolean(set.teamBGames.trim()),
+      );
+
+    const parsedSets = candidateSets.map((set) => ({
+      teamAGames: Number(set.teamAGames),
+      teamBGames: Number(set.teamBGames),
+    }));
+
+    if (
+      parsedSets.some(
+        (set) =>
+          !Number.isInteger(set.teamAGames) ||
+          !Number.isInteger(set.teamBGames) ||
+          set.teamAGames < 0 ||
+          set.teamBGames < 0 ||
+          set.teamAGames === set.teamBGames,
+      )
+    ) {
+      setLocalError("El marcador debe usar enteros >= 0 y sin empates por set.");
+      return;
+    }
+
+    try {
+      setLocalError(null);
+      await onSave(match.id, { winnerTeamId, sets: parsedSets });
+    } catch {
+      return;
+    }
+  }, [match.id, onSave, sets, winnerTeamId]);
+
+  return (
+    <div className="space-y-2 rounded-md border border-zinc-200 p-3">
+      <p className="text-sm font-medium">
+        {match.teamA.teamName} vs {match.teamB.teamName}
+      </p>
+      <p className="text-xs text-zinc-500">Estado: {match.status === "completed" ? "Completado" : "Pendiente"}</p>
+      <p className="text-xs text-zinc-600">Marcador actual: {formatMatchResult(match)}</p>
+
+      <div className="space-y-1.5">
+        <Label htmlFor={`winner-${match.id}`} className="text-xs text-zinc-500">
+          Ganador
+        </Label>
+        <select
+          id={`winner-${match.id}`}
+          className="h-9 w-full rounded-md border border-zinc-300 bg-white px-2 text-sm"
+          value={winnerTeamId}
+          onChange={(event) => setWinnerTeamId(event.target.value)}
+          disabled={isSubmitting}
+        >
+          <option value={match.teamA.id}>{match.teamA.teamName}</option>
+          <option value={match.teamB.id}>{match.teamB.teamName}</option>
+        </select>
+      </div>
+
+      {sets.map((set, index) => (
+        <div key={`${match.id}-set-${index + 1}`} className="grid grid-cols-[auto_1fr_auto_1fr] items-center gap-2">
+          <Label className="text-xs text-zinc-500">Set {index + 1}</Label>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={0}
+            value={set.teamAGames}
+            onChange={(event) => updateSetField(index, "teamAGames", event.target.value)}
+            placeholder="0"
+            disabled={isSubmitting}
+          />
+          <span className="text-xs text-zinc-500">-</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={0}
+            value={set.teamBGames}
+            onChange={(event) => updateSetField(index, "teamBGames", event.target.value)}
+            placeholder="0"
+            disabled={isSubmitting}
+          />
+        </div>
+      ))}
+
+      {localError ? <p className="text-xs text-rose-700">{localError}</p> : null}
+
+      <Button className="w-full" size="sm" disabled={isSubmitting} onClick={() => void handleSave()}>
+        {match.status === "completed" ? "Actualizar resultado" : "Guardar resultado"}
+      </Button>
+    </div>
+  );
+}
+
 function AdminCategoryContent({
   dashboard,
   categoryDetail,
@@ -55,6 +206,7 @@ function AdminCategoryContent({
   onGenerateGroups,
   onMoveTeamGroup,
   onGenerateMatches,
+  onReportMatchResult,
   error,
   feedback,
   isSubmitting,
@@ -68,6 +220,7 @@ function AdminCategoryContent({
   onGenerateGroups: () => Promise<void>;
   onMoveTeamGroup: (teamId: string, targetGroupName: string) => Promise<void>;
   onGenerateMatches: () => Promise<void>;
+  onReportMatchResult: (matchId: string, payload: { winnerTeamId: string; sets: TournamentSetScore[] }) => Promise<void>;
   error: string | null;
   feedback: string | null;
   isSubmitting: boolean;
@@ -183,6 +336,33 @@ function AdminCategoryContent({
             ) : null}
           </CardContent>
         </Card>
+
+        {groupStage ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Resultados de grupos</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {fixtureGenerated ? (
+                groupStage.matchesByGroup.map((group) => (
+                  <div key={`result-${group.groupId}`} className="space-y-2 rounded-lg border border-zinc-200 p-3">
+                    <p className="text-sm font-semibold">Grupo {group.groupName}</p>
+                    {group.matches.map((match) => (
+                      <MatchResultEditor
+                        key={`${match.id}-${match.status}-${match.result?.winnerTeamId ?? "none"}-${match.result?.sets.map((set) => `${set.teamAGames}-${set.teamBGames}`).join("_") ?? "none"}`}
+                        match={match}
+                        onSave={onReportMatchResult}
+                        isSubmitting={isSubmitting}
+                      />
+                    ))}
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-zinc-600">Genera el fixture para empezar a reportar resultados.</p>
+              )}
+            </CardContent>
+          </Card>
+        ) : null}
 
         <Card>
           <CardHeader>
@@ -401,6 +581,27 @@ function useAdminActions(
     }
   }, [categorySlug, reload, token, tournamentSlug]);
 
+  const onReportMatchResult = useCallback(
+    async (matchId: string, payload: { winnerTeamId: string; sets: TournamentSetScore[] }) => {
+      if (!token) {
+        return;
+      }
+
+      try {
+        setIsSubmitting(true);
+        setError(null);
+        await reportAdminTournamentGroupMatchResult(token, tournamentSlug, categorySlug, matchId, payload);
+        setFeedback("Resultado guardado.");
+        await reload();
+      } catch (nextError) {
+        setError(toErrorMessage(nextError));
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [categorySlug, reload, token, tournamentSlug],
+  );
+
   return {
     paymentInstructions,
     setPaymentInstructions,
@@ -412,6 +613,7 @@ function useAdminActions(
     onGenerateGroups,
     onMoveTeamGroup,
     onGenerateMatches,
+    onReportMatchResult,
   };
 }
 
@@ -468,6 +670,7 @@ function ConvexAdminCategoryPage() {
       onGenerateGroups={actions.onGenerateGroups}
       onMoveTeamGroup={actions.onMoveTeamGroup}
       onGenerateMatches={actions.onGenerateMatches}
+      onReportMatchResult={actions.onReportMatchResult}
       error={actions.error}
       feedback={actions.feedback}
       isSubmitting={actions.isSubmitting}
@@ -547,6 +750,7 @@ function MockAdminCategoryPage() {
       onGenerateGroups={actions.onGenerateGroups}
       onMoveTeamGroup={actions.onMoveTeamGroup}
       onGenerateMatches={actions.onGenerateMatches}
+      onReportMatchResult={actions.onReportMatchResult}
       error={actions.error}
       feedback={actions.feedback}
       isSubmitting={actions.isSubmitting}

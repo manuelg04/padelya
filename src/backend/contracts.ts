@@ -15,6 +15,7 @@ import type {
   PushSubscriptionState,
   TournamentRegistrationRequest,
   TournamentRegistrationStatus,
+  TournamentSetScore,
   UserRecord,
 } from "@/src/domain/types";
 
@@ -84,6 +85,16 @@ export interface BackendPadelService {
     tournamentSlug: string,
     categorySlug: string,
   ): MaybePromise<{ groupsCount: number; matchesCount: number }>;
+  reportTournamentGroupMatchResult(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+    matchId: string,
+    payload: {
+      winnerTeamId: string;
+      sets: TournamentSetScore[];
+    },
+  ): MaybePromise<{ matchId: string; status: "completed" }>;
   registerForCategory(
     token: string,
     tournamentSlug: string,

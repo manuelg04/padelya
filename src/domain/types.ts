@@ -176,12 +176,21 @@ export interface TournamentGroupView {
   teams: TournamentGroupTeamView[];
 }
 
+export interface TournamentSetScore {
+  teamAGames: number;
+  teamBGames: number;
+}
+
 export interface TournamentGroupMatchView {
   id: string;
   order: number;
-  status: "pending";
+  status: "pending" | "completed";
   teamA: TournamentGroupTeamView;
   teamB: TournamentGroupTeamView;
+  result: {
+    winnerTeamId: string;
+    sets: TournamentSetScore[];
+  } | null;
 }
 
 export interface TournamentGroupMatchesByGroupView {
@@ -194,10 +203,40 @@ export interface TournamentMyGroupMatchView extends TournamentGroupMatchView {
   groupName: string;
 }
 
+export interface TournamentGroupStandingRow {
+  team: TournamentGroupTeamView;
+  played: number;
+  wins: number;
+  losses: number;
+  setsFor: number;
+  setsAgainst: number;
+  setDiff: number;
+  gamesFor: number;
+  gamesAgainst: number;
+  gameDiff: number;
+  qualified: boolean;
+}
+
+export interface TournamentGroupStandingsView {
+  groupId: string;
+  groupName: string;
+  rows: TournamentGroupStandingRow[];
+  hasUnresolvedTieAtQualificationCutoff: boolean;
+}
+
+export interface TournamentQualifiedTeamView {
+  groupId: string;
+  groupName: string;
+  position: number;
+  team: TournamentGroupTeamView;
+}
+
 export interface TournamentGroupStage {
   generatedAt: string;
   groups: TournamentGroupView[];
   matchesByGroup: TournamentGroupMatchesByGroupView[];
+  standingsByGroup: TournamentGroupStandingsView[];
+  qualifiedTeams: TournamentQualifiedTeamView[];
 }
 
 export interface PublicTournamentCategoryDetail {

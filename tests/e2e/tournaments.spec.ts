@@ -219,7 +219,7 @@ test("operación de grupos: admin genera grupos/fixture y jugador ve mis partido
   const publicPage = await publicContext.newPage();
   await publicPage.goto(`http://127.0.0.1:3000/torneos/${tournamentSlug}/categorias/${categorySlug}`);
   await expect(publicPage.getByRole("heading", { name: "Grupos y partidos" })).toBeVisible();
-  await expect(publicPage.getByText("Grupo A")).toBeVisible();
+  await expect(publicPage.getByText("Grupo A").first()).toBeVisible();
   await expect(publicPage.getByText("vs")).toHaveCount(12);
 
   const playerContext = await browser.newContext();
@@ -263,4 +263,142 @@ test("operación de grupos: admin genera grupos/fixture y jugador ve mis partido
     },
   );
   expect(frozenChange.ok()).toBeFalsy();
+});
+
+test("iteración 3: admin reporta resultado y público ve tabla + clasificados en tiempo real", async ({
+  page,
+  request,
+  browser,
+}) => {
+  const adminPhone = "3009010100";
+  const adminToken = await createApiUser(request, adminPhone, "Admin Resultados");
+
+  const seeded = await request.post("/api/test/seed-club-admin", {
+    headers: {
+      Authorization: `Bearer ${adminToken}`,
+    },
+    data: {
+      clubSlug: "smash-club",
+      clubName: "Smash Club",
+      seedToken: "test-seed-token",
+    },
+  });
+  expect(seeded.ok()).toBeTruthy();
+
+  const createdTournament = await request.post("/api/admin/tournaments", {
+    headers: {
+      Authorization: `Bearer ${adminToken}`,
+    },
+    data: {
+      clubSlug: "smash-club",
+      name: "Torneo Resultados E2E",
+      startsAtLocal: "2030-02-22T18:00",
+      description: "Resultados y tabla",
+      categories: [{ name: "Mixto Elite", capacity: 8 }],
+    },
+  });
+  expect(createdTournament.ok()).toBeTruthy();
+  const createdBody = (await createdTournament.json()) as {
+    tournamentSlug: string;
+    categorySlugs: string[];
+  };
+
+  const tournamentSlug = createdBody.tournamentSlug;
+  const categorySlug = createdBody.categorySlugs[0]!;
+
+  for (let index = 1; index <= 8; index += 1) {
+    const phone = `300901020${index}`;
+    const token = await createApiUser(request, phone, `Jugador R${index}`);
+
+    const registration = await request.post(
+      `/api/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}/registrations`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        data: {
+          teamName: `Team R${index}`,
+        },
+      },
+    );
+    expect(registration.ok()).toBeTruthy();
+    const registrationPayload = (await registration.json()) as { registrationId: string };
+
+    const confirmed = await request.patch(
+      `/api/admin/tournaments/registrations/${encodeURIComponent(registrationPayload.registrationId)}/status`,
+      {
+        headers: {
+          Authorization: `Bearer ${adminToken}`,
+        },
+        data: { status: "confirmed" },
+      },
+    );
+    expect(confirmed.ok()).toBeTruthy();
+  }
+
+  const generatedGroups = await request.post(
+    `/api/admin/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}/groups`,
+    {
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+      },
+      data: {},
+    },
+  );
+  expect(generatedGroups.ok()).toBeTruthy();
+
+  const generatedMatches = await request.post(
+    `/api/admin/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}/group-matches`,
+    {
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+      },
+    },
+  );
+  expect(generatedMatches.ok()).toBeTruthy();
+
+  await page.goto(`/admin/torneos/${tournamentSlug}/categorias/${categorySlug}`);
+  await completeAuth(page, adminPhone, "Admin Resultados");
+  await expect(page.getByRole("heading", { name: "Resultados de grupos" })).toBeVisible();
+
+  const winnerSelect = page.locator("select[id^='winner-']").first();
+  await winnerSelect.selectOption({ index: 0 });
+
+  const numberInputs = page.locator("input[type='number']");
+  await numberInputs.nth(0).fill("6");
+  await numberInputs.nth(1).fill("4");
+  await numberInputs.nth(2).fill("6");
+  await numberInputs.nth(3).fill("3");
+
+  await page.getByRole("button", { name: "Guardar resultado" }).first().click();
+  await expect(page.getByText("Resultado guardado.")).toBeVisible();
+
+  const publicContext = await browser.newContext();
+  const publicPage = await publicContext.newPage();
+  await publicPage.goto(`http://127.0.0.1:3000/torneos/${tournamentSlug}/categorias/${categorySlug}`);
+
+  await expect(publicPage.getByRole("heading", { name: "Tabla de posiciones" })).toBeVisible();
+  await expect(publicPage.getByRole("heading", { name: "Clasificados" })).toBeVisible();
+  await expect(publicPage.getByText("Resultado: 6-4 / 6-3")).toBeVisible();
+
+  const detailResponse = await request.get(
+    `/api/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}`,
+  );
+  expect(detailResponse.ok()).toBeTruthy();
+  const detailPayload = (await detailResponse.json()) as {
+    category: {
+      groupStage: {
+        standingsByGroup: unknown[];
+        qualifiedTeams: unknown[];
+        matchesByGroup: Array<{ matches: Array<{ status: string; result: unknown }> }>;
+      } | null;
+    };
+  };
+  expect(detailPayload.category.groupStage?.standingsByGroup.length).toBeGreaterThan(0);
+  expect(detailPayload.category.groupStage?.qualifiedTeams.length).toBe(4);
+  expect(detailPayload.category.groupStage?.matchesByGroup[0]?.matches.some((match) => match.status === "completed")).toBe(
+    true,
+  );
+
+  await publicContext.close();
 });

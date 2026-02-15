@@ -14,6 +14,7 @@ import type {
   PushSubscriptionState,
   TournamentRegistrationRequest,
   TournamentRegistrationStatus,
+  TournamentSetScore,
   UserRecord,
 } from "@/src/domain/types";
 
@@ -379,6 +380,27 @@ export async function generateAdminTournamentGroupMatches(
       headers: {
         ...authHeaders(token),
       },
+    },
+  );
+  return parseJson(response);
+}
+
+export async function reportAdminTournamentGroupMatchResult(
+  token: string,
+  tournamentSlug: string,
+  categorySlug: string,
+  matchId: string,
+  payload: { winnerTeamId: string; sets: TournamentSetScore[] },
+): Promise<{ matchId: string; status: "completed" }> {
+  const response = await fetch(
+    `/api/admin/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}/group-matches/${encodeURIComponent(matchId)}/result`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(token),
+      },
+      body: JSON.stringify(payload),
     },
   );
   return parseJson(response);

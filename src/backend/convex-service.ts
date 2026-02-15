@@ -24,6 +24,7 @@ import type {
   PushSubscriptionState,
   TournamentRegistrationRequest,
   TournamentRegistrationStatus,
+  TournamentSetScore,
   UserRecord,
 } from "@/src/domain/types";
 
@@ -423,6 +424,26 @@ export class ConvexPadelService implements BackendPadelService {
       return await this.createAuthedClient(token).mutation(api.tournaments.generateCategoryGroupMatches, {
         tournamentSlug,
         categorySlug,
+      });
+    } catch (error) {
+      return normalizeError(error);
+    }
+  }
+
+  async reportTournamentGroupMatchResult(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+    matchId: string,
+    payload: { winnerTeamId: string; sets: TournamentSetScore[] },
+  ): Promise<{ matchId: string; status: "completed" }> {
+    try {
+      return await this.createAuthedClient(token).mutation(api.tournaments.reportCategoryGroupMatchResult, {
+        tournamentSlug,
+        categorySlug,
+        matchId: matchId as Id<"tournamentMatches">,
+        winnerTeamId: payload.winnerTeamId as Id<"tournamentTeams">,
+        sets: payload.sets,
       });
     } catch (error) {
       return normalizeError(error);

@@ -38,6 +38,7 @@ import {
   type TournamentGroupTeamView,
   type TournamentRegistrationRequest,
   type TournamentRegistrationStatus,
+  type TournamentSetScore,
   type UserRecord,
 } from "@/src/domain/types";
 import { APP_TIMEZONE, USE_AUTH_EMULATOR } from "@/src/lib/env";
@@ -162,7 +163,11 @@ interface TournamentMatchRecord {
   order: number;
   teamAId: string;
   teamBId: string;
-  status: "pending";
+  status: "pending" | "completed";
+  winnerTeamId: string | null;
+  sets: TournamentSetScore[] | null;
+  reportedAt: string | null;
+  reportedByUserId: string | null;
   createdByUserId: string;
   createdAt: string;
   updatedAt: string;
@@ -1243,6 +1248,10 @@ export class PadelService implements BackendPadelService {
           teamAId,
           teamBId,
           status: "pending",
+          winnerTeamId: null,
+          sets: null,
+          reportedAt: null,
+          reportedByUserId: null,
           createdByUserId: actor.id,
           createdAt: now,
           updatedAt: now,
@@ -1257,6 +1266,56 @@ export class PadelService implements BackendPadelService {
     return {
       groupsCount: groups.length,
       matchesCount: groups.length * GROUP_MATCH_PAIRS.length,
+    };
+  }
+
+  async reportTournamentGroupMatchResult(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+    matchId: string,
+    payload: { winnerTeamId: string; sets: TournamentSetScore[] },
+  ): Promise<{ matchId: string; status: "completed" }> {
+    const actor = this.getUserByToken(token);
+    const tournament = this.mustGetTournamentBySlug(tournamentSlug);
+    const club = this.mustGetClub(tournament.clubId);
+    this.assertClubAdmin(actor.id, club.id);
+
+    const category = this.mustGetCategoryBySlug(tournament.id, categorySlug);
+    const match = this.tournamentMatches.get(matchId);
+    if (!match) {
+      throw new DomainError("NOT_FOUND", "Partido no encontrado.");
+    }
+
+    if (match.tournamentId !== tournament.id || match.categoryId !== category.id || match.phase !== "group") {
+      throw new DomainError("NOT_FOUND", "Partido no encontrado.");
+    }
+
+    const normalizedSets = this.validateAndNormalizeTournamentResult({
+      teamAId: match.teamAId,
+      teamBId: match.teamBId,
+      winnerTeamId: payload.winnerTeamId,
+      sets: payload.sets,
+    });
+
+    const now = nowIso();
+    const next: TournamentMatchRecord = {
+      ...match,
+      status: "completed",
+      winnerTeamId: payload.winnerTeamId,
+      sets: normalizedSets,
+      reportedAt: now,
+      reportedByUserId: actor.id,
+      updatedAt: now,
+    };
+
+    this.tournamentMatches.set(match.id, next);
+    this.mustGetMatchesByCategory(category.id).set(match.id, next);
+    this.mustGetMatchesByGroup(match.groupId).set(match.id, next);
+
+    return {
+      matchId: match.id,
+      status: "completed",
     };
   }
 
@@ -1908,12 +1967,23 @@ export class PadelService implements BackendPadelService {
     if (!teamA || !teamB) {
       return null;
     }
+    const result =
+      match.status === "completed" && match.winnerTeamId && match.sets
+        ? {
+            winnerTeamId: match.winnerTeamId,
+            sets: match.sets.map((set) => ({
+              teamAGames: set.teamAGames,
+              teamBGames: set.teamBGames,
+            })),
+          }
+        : null;
     return {
       id: match.id,
       order: match.order,
       status: match.status,
       teamA,
       teamB,
+      result,
     };
   }
 
@@ -1924,6 +1994,8 @@ export class PadelService implements BackendPadelService {
     }
 
     const matches = this.listGroupMatchesForCategory(categoryId);
+    const standingsByGroup = this.buildCategoryGroupStageStandings(categoryId, groups, matches);
+    const standingsByGroupId = new Map(standingsByGroup.map((standing) => [standing.groupId, standing] as const));
 
     return {
       generatedAt: groups[0]?.createdAt ?? nowIso(),
@@ -1943,7 +2015,188 @@ export class PadelService implements BackendPadelService {
           .map((match) => this.toGroupMatchView(match))
           .filter((match): match is TournamentGroupMatchView => Boolean(match)),
       })),
+      standingsByGroup,
+      qualifiedTeams: groups.flatMap((group) => {
+        const standings = standingsByGroupId.get(group.id);
+        if (!standings) {
+          return [];
+        }
+        return standings.rows
+          .filter((row) => row.qualified)
+          .slice(0, 2)
+          .map((row, index) => ({
+            groupId: group.id,
+            groupName: group.name,
+            position: index + 1,
+            team: row.team,
+          }));
+      }),
     };
+  }
+
+  private buildCategoryGroupStageStandings(
+    categoryId: string,
+    groups: TournamentGroupRecord[],
+    matches: TournamentMatchRecord[],
+  ): TournamentGroupStage["standingsByGroup"] {
+    return groups.map((group) => {
+      const baseRows = group.teamIds
+        .map((teamId) => {
+          const team = this.toGroupTeamView(teamId);
+          if (!team) {
+            return null;
+          }
+          return {
+            team,
+            teamCreatedAt: this.teams.get(teamId)?.createdAt ?? "",
+            played: 0,
+            wins: 0,
+            losses: 0,
+            setsFor: 0,
+            setsAgainst: 0,
+            setDiff: 0,
+            gamesFor: 0,
+            gamesAgainst: 0,
+            gameDiff: 0,
+            qualified: false,
+          };
+        })
+        .filter(
+          (
+            row,
+          ): row is {
+            team: TournamentGroupTeamView;
+            teamCreatedAt: string;
+            played: number;
+            wins: number;
+            losses: number;
+            setsFor: number;
+            setsAgainst: number;
+            setDiff: number;
+            gamesFor: number;
+            gamesAgainst: number;
+            gameDiff: number;
+            qualified: boolean;
+          } => Boolean(row),
+        );
+
+      const rowsByTeamId = new Map(baseRows.map((row) => [row.team.id, row] as const));
+
+      for (const match of matches) {
+        if (match.groupId !== group.id || match.status !== "completed" || !match.winnerTeamId || !match.sets) {
+          continue;
+        }
+
+        const teamAStats = rowsByTeamId.get(match.teamAId);
+        const teamBStats = rowsByTeamId.get(match.teamBId);
+        if (!teamAStats || !teamBStats) {
+          continue;
+        }
+
+        teamAStats.played += 1;
+        teamBStats.played += 1;
+
+        if (match.winnerTeamId === match.teamAId) {
+          teamAStats.wins += 1;
+          teamBStats.losses += 1;
+        } else if (match.winnerTeamId === match.teamBId) {
+          teamBStats.wins += 1;
+          teamAStats.losses += 1;
+        } else {
+          continue;
+        }
+
+        for (const set of match.sets) {
+          const teamAGames = this.ensureNonNegativeInteger(set.teamAGames);
+          const teamBGames = this.ensureNonNegativeInteger(set.teamBGames);
+
+          teamAStats.gamesFor += teamAGames;
+          teamAStats.gamesAgainst += teamBGames;
+          teamBStats.gamesFor += teamBGames;
+          teamBStats.gamesAgainst += teamAGames;
+
+          if (teamAGames > teamBGames) {
+            teamAStats.setsFor += 1;
+            teamBStats.setsAgainst += 1;
+          } else if (teamBGames > teamAGames) {
+            teamBStats.setsFor += 1;
+            teamAStats.setsAgainst += 1;
+          }
+        }
+      }
+
+      const rows = [...baseRows]
+        .map((row) => ({
+          ...row,
+          setDiff: row.setsFor - row.setsAgainst,
+          gameDiff: row.gamesFor - row.gamesAgainst,
+        }))
+        .sort((a, b) => {
+          if (a.wins !== b.wins) {
+            return b.wins - a.wins;
+          }
+          if (a.setDiff !== b.setDiff) {
+            return b.setDiff - a.setDiff;
+          }
+          if (a.gameDiff !== b.gameDiff) {
+            return b.gameDiff - a.gameDiff;
+          }
+          if (a.teamCreatedAt !== b.teamCreatedAt) {
+            return a.teamCreatedAt.localeCompare(b.teamCreatedAt);
+          }
+          return a.team.id.localeCompare(b.team.id);
+        })
+        .map((row, index) => ({
+          team: row.team,
+          played: row.played,
+          wins: row.wins,
+          losses: row.losses,
+          setsFor: row.setsFor,
+          setsAgainst: row.setsAgainst,
+          setDiff: row.setDiff,
+          gamesFor: row.gamesFor,
+          gamesAgainst: row.gamesAgainst,
+          gameDiff: row.gameDiff,
+          qualified: index < 2,
+        }));
+
+      return {
+        groupId: group.id,
+        groupName: group.name,
+        rows,
+        hasUnresolvedTieAtQualificationCutoff: this.hasUnresolvedTieAtQualificationCutoff(rows),
+      };
+    });
+  }
+
+  private hasUnresolvedTieAtQualificationCutoff(rows: TournamentGroupStage["standingsByGroup"][number]["rows"]): boolean {
+    if (rows.length <= 2) {
+      return false;
+    }
+
+    const cutoffRow = rows[1];
+    if (!cutoffRow) {
+      return false;
+    }
+
+    const sameMetrics = (row: (typeof rows)[number]) =>
+      row.wins === cutoffRow.wins &&
+      row.setDiff === cutoffRow.setDiff &&
+      row.gameDiff === cutoffRow.gameDiff;
+
+    const bucketStart = rows.findIndex(sameMetrics);
+    if (bucketStart < 0) {
+      return false;
+    }
+
+    let bucketEnd = bucketStart;
+    while (bucketEnd + 1 < rows.length && sameMetrics(rows[bucketEnd + 1]!)) {
+      bucketEnd += 1;
+    }
+
+    const bucketSize = bucketEnd - bucketStart + 1;
+    const slotsAtCutoff = 2 - bucketStart;
+    return slotsAtCutoff < bucketSize;
   }
 
   private filterMyGroupMatches(
@@ -1982,6 +2235,58 @@ export class PadelService implements BackendPadelService {
       throw new DomainError("VALIDATION_ERROR", "Orden de grupo inválido.");
     }
     return String.fromCharCode("A".charCodeAt(0) + order - 1);
+  }
+
+  private ensureNonNegativeInteger(value: number): number {
+    if (!Number.isInteger(value) || value < 0) {
+      throw new DomainError("VALIDATION_ERROR", "El marcador es inválido.");
+    }
+    return value;
+  }
+
+  private validateAndNormalizeTournamentResult(input: {
+    teamAId: string;
+    teamBId: string;
+    winnerTeamId: string;
+    sets: TournamentSetScore[];
+  }): TournamentSetScore[] {
+    if (input.winnerTeamId !== input.teamAId && input.winnerTeamId !== input.teamBId) {
+      throw new DomainError("VALIDATION_ERROR", "El ganador no coincide con los equipos del partido.");
+    }
+
+    if (input.sets.length < 2 || input.sets.length > 3) {
+      throw new DomainError("VALIDATION_ERROR", "Debes enviar 2 o 3 sets.");
+    }
+
+    let teamASetsWon = 0;
+    let teamBSetsWon = 0;
+
+    const normalizedSets = input.sets.map((set) => {
+      const teamAGames = this.ensureNonNegativeInteger(set.teamAGames);
+      const teamBGames = this.ensureNonNegativeInteger(set.teamBGames);
+
+      if (teamAGames === teamBGames) {
+        throw new DomainError("VALIDATION_ERROR", "No se permiten empates dentro de un set.");
+      }
+
+      if (teamAGames > teamBGames) {
+        teamASetsWon += 1;
+      } else {
+        teamBSetsWon += 1;
+      }
+
+      return {
+        teamAGames,
+        teamBGames,
+      };
+    });
+
+    const winnerSetsWon = input.winnerTeamId === input.teamAId ? teamASetsWon : teamBSetsWon;
+    if (winnerSetsWon !== 2) {
+      throw new DomainError("VALIDATION_ERROR", "El equipo ganador debe ganar exactamente 2 sets.");
+    }
+
+    return normalizedSets;
   }
 
   private findActiveRegistration(categoryId: string, userId: string): TournamentRegistrationRecord | null {

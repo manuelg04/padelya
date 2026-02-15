@@ -38,6 +38,15 @@ function LoadingView() {
   );
 }
 
+type GroupMatchView = NonNullable<PublicTournamentCategoryDetail["groupStage"]>["matchesByGroup"][number]["matches"][number];
+
+function formatMatchScore(match: GroupMatchView): string {
+  if (!match.result) {
+    return "Pendiente";
+  }
+  return match.result.sets.map((set) => `${set.teamAGames}-${set.teamBGames}`).join(" / ");
+}
+
 function CategoryContent({
   data,
   onRegister,
@@ -109,6 +118,7 @@ function CategoryContent({
                   <p>
                     {match.teamA.teamName} vs {match.teamB.teamName}
                   </p>
+                  <p className="text-xs text-zinc-600">Resultado: {formatMatchScore(match)}</p>
                 </div>
               ))}
             </CardContent>
@@ -141,9 +151,12 @@ function CategoryContent({
                       <p className="text-xs uppercase text-zinc-500">Partidos</p>
                       {groupMatches.length > 0 ? (
                         groupMatches.map((match) => (
-                          <p key={match.id} className="text-sm">
-                            {match.teamA.teamName} vs {match.teamB.teamName}
-                          </p>
+                          <div key={match.id} className="text-sm">
+                            <p>
+                              {match.teamA.teamName} vs {match.teamB.teamName}
+                            </p>
+                            <p className="text-xs text-zinc-600">Resultado: {formatMatchScore(match)}</p>
+                          </div>
                         ))
                       ) : (
                         <p className="text-sm text-zinc-500">Pendientes de generación.</p>
@@ -152,6 +165,51 @@ function CategoryContent({
                   </div>
                 );
               })}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {data.groupStage ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Tabla de posiciones</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {data.groupStage.standingsByGroup.map((groupStanding) => (
+                <div key={`standing-${groupStanding.groupId}`} className="space-y-2 rounded-lg border border-zinc-200 p-3">
+                  <p className="text-sm font-semibold">Grupo {groupStanding.groupName}</p>
+                  {groupStanding.rows.map((row, index) => (
+                    <p key={`${groupStanding.groupId}-${row.team.id}`} className="text-sm">
+                      {index + 1}. {row.team.teamName} · W/L {row.wins}/{row.losses} · SetDiff {row.setDiff} · GameDiff{" "}
+                      {row.gameDiff} {row.qualified ? "· Clasificado" : ""}
+                    </p>
+                  ))}
+                  {groupStanding.hasUnresolvedTieAtQualificationCutoff ? (
+                    <p className="text-xs text-amber-700">
+                      Empate no resuelto automáticamente en el corte de clasificación.
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {data.groupStage ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Clasificados</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-1 text-sm">
+              {data.groupStage.qualifiedTeams.length === 0 ? (
+                <p className="text-zinc-500">Sin clasificados todavía.</p>
+              ) : (
+                data.groupStage.qualifiedTeams.map((team) => (
+                  <p key={`${team.groupId}-${team.team.id}-${team.position}`}>
+                    Grupo {team.groupName} · #{team.position} · {team.team.teamName}
+                  </p>
+                ))
+              )}
             </CardContent>
           </Card>
         ) : null}
