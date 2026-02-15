@@ -162,6 +162,44 @@ export interface TournamentMyRegistration {
   updatedAt: string;
 }
 
+export interface TournamentGroupTeamView {
+  id: string;
+  teamName: string;
+  primaryAlias: string | null;
+  primaryPhone: string | null;
+}
+
+export interface TournamentGroupView {
+  id: string;
+  name: string;
+  order: number;
+  teams: TournamentGroupTeamView[];
+}
+
+export interface TournamentGroupMatchView {
+  id: string;
+  order: number;
+  status: "pending";
+  teamA: TournamentGroupTeamView;
+  teamB: TournamentGroupTeamView;
+}
+
+export interface TournamentGroupMatchesByGroupView {
+  groupId: string;
+  groupName: string;
+  matches: TournamentGroupMatchView[];
+}
+
+export interface TournamentMyGroupMatchView extends TournamentGroupMatchView {
+  groupName: string;
+}
+
+export interface TournamentGroupStage {
+  generatedAt: string;
+  groups: TournamentGroupView[];
+  matchesByGroup: TournamentGroupMatchesByGroupView[];
+}
+
 export interface PublicTournamentCategoryDetail {
   tournament: {
     id: string;
@@ -188,6 +226,8 @@ export interface PublicTournamentCategoryDetail {
     counts: TournamentCategoryCounts;
   };
   myRegistration: TournamentMyRegistration | null;
+  groupStage: TournamentGroupStage | null;
+  myGroupMatches: TournamentMyGroupMatchView[];
 }
 
 export interface AdminClubMembership {

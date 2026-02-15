@@ -4,6 +4,7 @@ import type { QueryCtx, MutationCtx } from "../_generated/server";
 type ReadCtx = QueryCtx | MutationCtx;
 
 export type RegistrationStatus = "pending" | "confirmed" | "waitlist" | "cancelled";
+export type TournamentMatchPhase = "group";
 
 export async function getClubBySlug(ctx: ReadCtx, slug: string): Promise<Doc<"clubs"> | null> {
   return ctx.db
@@ -64,6 +65,24 @@ export async function listRegistrationsByCategory(
   return [...pending, ...confirmed, ...waitlist, ...cancelled].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
+export async function listRegistrationsByCategoryStatus(
+  ctx: ReadCtx,
+  categoryId: Id<"tournamentCategories">,
+  status: RegistrationStatus,
+): Promise<Doc<"tournamentRegistrations">[]> {
+  return ctx.db
+    .query("tournamentRegistrations")
+    .withIndex("by_category_status", (q) => q.eq("categoryId", categoryId).eq("status", status))
+    .collect();
+}
+
+export async function listConfirmedRegistrationsByCategory(
+  ctx: ReadCtx,
+  categoryId: Id<"tournamentCategories">,
+): Promise<Doc<"tournamentRegistrations">[]> {
+  return listRegistrationsByCategoryStatus(ctx, categoryId, "confirmed");
+}
+
 export async function countRegistrationsByStatus(
   ctx: ReadCtx,
   categoryId: Id<"tournamentCategories">,
@@ -116,4 +135,55 @@ export async function getTeamById(
   teamId: Id<"tournamentTeams">,
 ): Promise<Doc<"tournamentTeams"> | null> {
   return ctx.db.get(teamId);
+}
+
+export async function listTournamentGroupsByCategory(
+  ctx: ReadCtx,
+  categoryId: Id<"tournamentCategories">,
+): Promise<Doc<"tournamentGroups">[]> {
+  const rows = await ctx.db
+    .query("tournamentGroups")
+    .withIndex("by_category", (q) => q.eq("categoryId", categoryId))
+    .collect();
+  return rows.sort((a, b) => a.order - b.order);
+}
+
+export async function getTournamentGroupByCategoryName(
+  ctx: ReadCtx,
+  categoryId: Id<"tournamentCategories">,
+  name: string,
+): Promise<Doc<"tournamentGroups"> | null> {
+  return ctx.db
+    .query("tournamentGroups")
+    .withIndex("by_category_name", (q) => q.eq("categoryId", categoryId).eq("name", name))
+    .unique();
+}
+
+export async function listTournamentMatchesByCategoryPhase(
+  ctx: ReadCtx,
+  categoryId: Id<"tournamentCategories">,
+  phase: TournamentMatchPhase,
+): Promise<Doc<"tournamentMatches">[]> {
+  const rows = await ctx.db
+    .query("tournamentMatches")
+    .withIndex("by_category_phase", (q) => q.eq("categoryId", categoryId).eq("phase", phase))
+    .collect();
+
+  return rows.sort((a, b) => {
+    if (a.groupId !== b.groupId) {
+      return String(a.groupId).localeCompare(String(b.groupId));
+    }
+    return a.order - b.order;
+  });
+}
+
+export async function listTournamentMatchesByGroup(
+  ctx: ReadCtx,
+  groupId: Id<"tournamentGroups">,
+): Promise<Doc<"tournamentMatches">[]> {
+  const rows = await ctx.db
+    .query("tournamentMatches")
+    .withIndex("by_group", (q) => q.eq("groupId", groupId))
+    .collect();
+  return rows.sort((a, b) => a.order - b.order);
 }

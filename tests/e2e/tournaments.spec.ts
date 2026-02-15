@@ -124,3 +124,143 @@ test("happy path torneo por link: otp + inscripción + confirmación admin", asy
   await expect(page.getByText("Estado:")).toBeVisible();
   await expect(page.getByText("confirmed")).toBeVisible();
 });
+
+test("operación de grupos: admin genera grupos/fixture y jugador ve mis partidos", async ({ page, request, browser }) => {
+  const adminPhone = "3009000100";
+  const adminToken = await createApiUser(request, adminPhone, "Admin Operacion");
+
+  const seeded = await request.post("/api/test/seed-club-admin", {
+    headers: {
+      Authorization: `Bearer ${adminToken}`,
+    },
+    data: {
+      clubSlug: "smash-club",
+      clubName: "Smash Club",
+      seedToken: "test-seed-token",
+    },
+  });
+  expect(seeded.ok()).toBeTruthy();
+
+  const createdTournament = await request.post("/api/admin/tournaments", {
+    headers: {
+      Authorization: `Bearer ${adminToken}`,
+    },
+    data: {
+      clubSlug: "smash-club",
+      name: "Torneo Operación",
+      startsAtLocal: "2030-02-21T18:00",
+      description: "Operación de grupos",
+      categories: [{ name: "Mixto Avanzado", capacity: 8 }],
+    },
+  });
+  expect(createdTournament.ok()).toBeTruthy();
+  const createdBody = (await createdTournament.json()) as {
+    tournamentSlug: string;
+    categorySlugs: string[];
+  };
+
+  const tournamentSlug = createdBody.tournamentSlug;
+  const categorySlug = createdBody.categorySlugs[0]!;
+
+  const registrationIds: string[] = [];
+  const firstPlayerPhone = "3009000201";
+  let firstPlayerToken = "";
+
+  for (let index = 1; index <= 8; index += 1) {
+    const phone = `300900020${index}`;
+    const token = await createApiUser(request, phone, `Jugador ${index}`);
+    if (index === 1) {
+      firstPlayerToken = token;
+    }
+
+    const registration = await request.post(
+      `/api/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}/registrations`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        data: {
+          teamName: `Team ${index}`,
+        },
+      },
+    );
+    expect(registration.ok()).toBeTruthy();
+    const registrationPayload = (await registration.json()) as { registrationId: string };
+    registrationIds.push(registrationPayload.registrationId);
+
+    const confirmed = await request.patch(
+      `/api/admin/tournaments/registrations/${encodeURIComponent(registrationPayload.registrationId)}/status`,
+      {
+        headers: {
+          Authorization: `Bearer ${adminToken}`,
+        },
+        data: { status: "confirmed" },
+      },
+    );
+    expect(confirmed.ok()).toBeTruthy();
+  }
+
+  await page.goto(`/admin/torneos/${tournamentSlug}/categorias/${categorySlug}`);
+  await completeAuth(page, adminPhone, "Admin Operacion");
+  await expect(page.getByRole("heading", { name: "Operación de grupos" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Generar grupos" }).click();
+  await expect(page.getByText("Grupos generados.")).toBeVisible();
+
+  const firstGroupSelect = page.locator("select").first();
+  await firstGroupSelect.selectOption("B");
+  await expect(page.getByText("Equipo movido de grupo.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Generar partidos de grupos" }).click();
+  await expect(page.getByText("Partidos de grupos generados.")).toBeVisible();
+  await expect(page.getByText("Partidos de grupos ya generados.")).toBeVisible();
+
+  const publicContext = await browser.newContext();
+  const publicPage = await publicContext.newPage();
+  await publicPage.goto(`http://127.0.0.1:3000/torneos/${tournamentSlug}/categorias/${categorySlug}`);
+  await expect(publicPage.getByRole("heading", { name: "Grupos y partidos" })).toBeVisible();
+  await expect(publicPage.getByText("Grupo A")).toBeVisible();
+  await expect(publicPage.getByText("vs")).toHaveCount(12);
+
+  const playerContext = await browser.newContext();
+  const playerPage = await playerContext.newPage();
+  await playerPage.goto(
+    `http://127.0.0.1:3000/login?redirect=${encodeURIComponent(`/torneos/${tournamentSlug}/categorias/${categorySlug}`)}`,
+  );
+  await completeAuth(playerPage, firstPlayerPhone, "Jugador 1");
+  await expect(playerPage).toHaveURL(new RegExp(`/torneos/${tournamentSlug}/categorias/${categorySlug}`));
+  const myMatchesCard = playerPage.locator("div").filter({
+    has: playerPage.getByRole("heading", { name: "Mis partidos" }),
+  });
+  await expect(myMatchesCard.getByRole("heading", { name: "Mis partidos" })).toBeVisible();
+
+  const myMatchesResponse = await request.get(
+    `/api/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${firstPlayerToken}`,
+      },
+    },
+  );
+  expect(myMatchesResponse.ok()).toBeTruthy();
+  const myMatchesPayload = (await myMatchesResponse.json()) as {
+    category: {
+      myGroupMatches: unknown[];
+    };
+  };
+  expect(myMatchesPayload.category.myGroupMatches).toHaveLength(3);
+
+  await publicContext.close();
+  await playerContext.close();
+
+  const frozenChange = await request.patch(
+    `/api/admin/tournaments/registrations/${encodeURIComponent(registrationIds[0]!)}/status`,
+    {
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+      },
+      data: { status: "waitlist" },
+    },
+  );
+  expect(frozenChange.ok()).toBeFalsy();
+});

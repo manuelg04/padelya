@@ -61,7 +61,8 @@ function CategoryContent({
   feedback: string | null;
   error: string | null;
 }) {
-  const canRegister = !data.myRegistration;
+  const categoryClosed = Boolean(data.groupStage);
+  const canRegister = !data.myRegistration && !categoryClosed;
 
   return (
     <AppShell>
@@ -78,6 +79,9 @@ function CategoryContent({
             </p>
             <p>Pendientes: {data.category.counts.pending} · Lista espera: {data.category.counts.waitlist}</p>
             {data.category.note ? <p>{data.category.note}</p> : null}
+            {categoryClosed ? (
+              <p className="text-amber-700">La categoría ya cerró inscripciones y está en fase de grupos.</p>
+            ) : null}
           </CardContent>
         </Card>
 
@@ -93,6 +97,65 @@ function CategoryContent({
           </Card>
         ) : null}
 
+        {data.myGroupMatches.length > 0 ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Mis partidos</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              {data.myGroupMatches.map((match) => (
+                <div key={match.id} className="rounded-md border border-zinc-200 p-2">
+                  <p className="font-medium">Grupo {match.groupName}</p>
+                  <p>
+                    {match.teamA.teamName} vs {match.teamB.teamName}
+                  </p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {data.groupStage ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Grupos y partidos</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {data.groupStage.groups.map((group) => {
+                const groupMatches =
+                  data.groupStage?.matchesByGroup.find((entry) => entry.groupId === group.id)?.matches ?? [];
+                return (
+                  <div key={group.id} className="space-y-2 rounded-lg border border-zinc-200 p-3">
+                    <p className="text-sm font-semibold">Grupo {group.name}</p>
+                    {group.teams.length > 0 ? (
+                      <div className="space-y-1 text-sm">
+                        {group.teams.map((team) => (
+                          <p key={team.id}>{team.teamName}</p>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-zinc-500">Sin equipos.</p>
+                    )}
+
+                    <div className="space-y-1">
+                      <p className="text-xs uppercase text-zinc-500">Partidos</p>
+                      {groupMatches.length > 0 ? (
+                        groupMatches.map((match) => (
+                          <p key={match.id} className="text-sm">
+                            {match.teamA.teamName} vs {match.teamB.teamName}
+                          </p>
+                        ))
+                      ) : (
+                        <p className="text-sm text-zinc-500">Pendientes de generación.</p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+        ) : null}
+
         {data.myRegistration ? (
           <Card>
             <CardHeader>
@@ -103,7 +166,12 @@ function CategoryContent({
                 Estado: <strong>{data.myRegistration.status}</strong>
               </p>
               <p>Pareja: {data.myRegistration.teamName}</p>
-              <Button variant="outline" className="w-full" onClick={() => void onCancel()} disabled={isSubmitting}>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => void onCancel()}
+                disabled={isSubmitting || categoryClosed}
+              >
                 Cancelar inscripción
               </Button>
             </CardContent>
@@ -170,6 +238,11 @@ function useCategoryActions(
       return;
     }
 
+    if (data?.groupStage) {
+      setError("La categoría ya está cerrada para inscripciones.");
+      return;
+    }
+
     try {
       setIsSubmitting(true);
       setError(null);
@@ -185,10 +258,15 @@ function useCategoryActions(
     } finally {
       setIsSubmitting(false);
     }
-  }, [categorySlug, partnerPhone, pathname, reload, router, teamName, token, tournamentSlug, user]);
+  }, [categorySlug, data?.groupStage, partnerPhone, pathname, reload, router, teamName, token, tournamentSlug, user]);
 
   const handleCancel = useCallback(async () => {
     if (!token || !data?.myRegistration) {
+      return;
+    }
+
+    if (data.groupStage) {
+      setError("La categoría ya está cerrada para cambios de inscripción.");
       return;
     }
 
@@ -204,7 +282,7 @@ function useCategoryActions(
     } finally {
       setIsSubmitting(false);
     }
-  }, [data?.myRegistration, reload, token]);
+  }, [data, reload, token]);
 
   return {
     teamName,

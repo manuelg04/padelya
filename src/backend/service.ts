@@ -33,6 +33,9 @@ import {
   type PublicTournamentDetail,
   type PushSubscriptionPayload,
   type PushSubscriptionState,
+  type TournamentGroupMatchView,
+  type TournamentGroupStage,
+  type TournamentGroupTeamView,
   type TournamentRegistrationRequest,
   type TournamentRegistrationStatus,
   type UserRecord,
@@ -138,7 +141,43 @@ interface TournamentRegistrationRecord {
   statusChangedByUserId: string | null;
 }
 
+interface TournamentGroupRecord {
+  id: string;
+  tournamentId: string;
+  categoryId: string;
+  name: string;
+  order: number;
+  teamIds: string[];
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface TournamentMatchRecord {
+  id: string;
+  tournamentId: string;
+  categoryId: string;
+  phase: "group";
+  groupId: string;
+  order: number;
+  teamAId: string;
+  teamBId: string;
+  status: "pending";
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 const WATCHER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const GROUP_MATCH_PAIRS: ReadonlyArray<readonly [number, number]> = [
+  [0, 1],
+  [2, 3],
+  [0, 2],
+  [1, 3],
+  [0, 3],
+  [1, 2],
+] as const;
+const ALLOWED_GROUP_TEAM_COUNTS = new Set([8, 12, 16]);
 
 class AsyncLock {
   private queue = Promise.resolve();
@@ -187,6 +226,12 @@ export class PadelService implements BackendPadelService {
   private registrations = new Map<string, TournamentRegistrationRecord>();
   private registrationsByCategory = new Map<string, Map<string, TournamentRegistrationRecord>>();
   private registrationsByPrimary = new Map<string, Map<string, TournamentRegistrationRecord>>();
+  private tournamentGroups = new Map<string, TournamentGroupRecord>();
+  private groupsByCategory = new Map<string, Map<string, TournamentGroupRecord>>();
+  private groupByCategoryName = new Map<string, Map<string, string>>();
+  private tournamentMatches = new Map<string, TournamentMatchRecord>();
+  private matchesByCategory = new Map<string, Map<string, TournamentMatchRecord>>();
+  private matchesByGroup = new Map<string, Map<string, TournamentMatchRecord>>();
   private locksByMatchId = new Map<string, AsyncLock>();
   private logs: EventLogRecord[] = [];
   private events = new EventEmitter();
@@ -214,6 +259,12 @@ export class PadelService implements BackendPadelService {
     this.registrations.clear();
     this.registrationsByCategory.clear();
     this.registrationsByPrimary.clear();
+    this.tournamentGroups.clear();
+    this.groupsByCategory.clear();
+    this.groupByCategoryName.clear();
+    this.tournamentMatches.clear();
+    this.matchesByCategory.clear();
+    this.matchesByGroup.clear();
     this.locksByMatchId.clear();
     this.logs = [];
   }
@@ -755,12 +806,14 @@ export class PadelService implements BackendPadelService {
     const counts = this.getCategoryCounts(category.id);
 
     let myRegistration: PublicTournamentCategoryDetail["myRegistration"] = null;
+    let myTeamId: string | null = null;
     if (token) {
       try {
         const actor = this.getUserByToken(token);
         const active = this.findActiveRegistration(category.id, actor.id);
         if (active) {
           const team = this.teams.get(active.teamId);
+          myTeamId = active.teamId;
           myRegistration = {
             id: active.id,
             status: active.status,
@@ -774,6 +827,9 @@ export class PadelService implements BackendPadelService {
         myRegistration = null;
       }
     }
+
+    const groupStage = this.buildCategoryGroupStage(category.id);
+    const myGroupMatches = myTeamId ? this.filterMyGroupMatches(category.id, myTeamId) : [];
 
     return {
       tournament: {
@@ -801,6 +857,8 @@ export class PadelService implements BackendPadelService {
         counts,
       },
       myRegistration,
+      groupStage,
+      myGroupMatches,
     };
   }
 
@@ -984,12 +1042,221 @@ export class PadelService implements BackendPadelService {
       this.categoriesByTournament.get(tournamentId)?.set(categoryId, category);
       this.categoryBySlug.get(tournamentId)?.set(categorySlug, categoryId);
       this.registrationsByCategory.set(categoryId, new Map());
+      this.groupsByCategory.set(categoryId, new Map());
+      this.groupByCategoryName.set(categoryId, new Map());
+      this.matchesByCategory.set(categoryId, new Map());
       categorySlugs.push(categorySlug);
     }
 
     return {
       tournamentSlug,
       categorySlugs,
+    };
+  }
+
+  async generateTournamentGroups(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+    input?: { groupCount?: number },
+  ): Promise<{ groupCount: number; teamsCount: number }> {
+    const actor = this.getUserByToken(token);
+    const tournament = this.mustGetTournamentBySlug(tournamentSlug);
+    const club = this.mustGetClub(tournament.clubId);
+    this.assertClubAdmin(actor.id, club.id);
+
+    const category = this.mustGetCategoryBySlug(tournament.id, categorySlug);
+    if (this.hasGeneratedGroups(category.id)) {
+      throw new DomainError("VALIDATION_ERROR", "Los grupos ya fueron generados.");
+    }
+
+    const confirmedRegistrations = this.listRegistrationsForCategory(category.id).filter(
+      (registration) => registration.status === "confirmed",
+    );
+    const teamIds = confirmedRegistrations.map((registration) => registration.teamId);
+
+    if (!ALLOWED_GROUP_TEAM_COUNTS.has(teamIds.length)) {
+      throw new DomainError("VALIDATION_ERROR", "Solo se pueden generar grupos con 8, 12 o 16 equipos confirmados.");
+    }
+
+    const defaultGroupCount = teamIds.length / 4;
+    const groupCount = input?.groupCount ?? defaultGroupCount;
+    if (!Number.isInteger(groupCount) || groupCount <= 0 || groupCount !== defaultGroupCount) {
+      throw new DomainError("VALIDATION_ERROR", "La cantidad de grupos no coincide con equipos confirmados.");
+    }
+
+    const shuffled = this.shuffle([...teamIds]);
+    const groupedTeamIds: string[][] = Array.from({ length: groupCount }, () => []);
+    shuffled.forEach((teamId, index) => {
+      groupedTeamIds[index % groupCount]?.push(teamId);
+    });
+
+    if (groupedTeamIds.some((group) => group.length !== 4)) {
+      throw new DomainError("VALIDATION_ERROR", "No fue posible distribuir los equipos en grupos de 4.");
+    }
+
+    const now = nowIso();
+    const categoryGroups = this.mustGetGroupsByCategory(category.id);
+    const byName = this.mustGetGroupNameMap(category.id);
+
+    groupedTeamIds.forEach((groupTeamIds, index) => {
+      const groupId = randomUUID();
+      const groupName = this.groupNameFromOrder(index + 1);
+      const group: TournamentGroupRecord = {
+        id: groupId,
+        tournamentId: tournament.id,
+        categoryId: category.id,
+        name: groupName,
+        order: index + 1,
+        teamIds: groupTeamIds,
+        createdByUserId: actor.id,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.tournamentGroups.set(groupId, group);
+      categoryGroups.set(groupId, group);
+      byName.set(groupName, groupId);
+      this.matchesByGroup.set(groupId, new Map());
+    });
+
+    return {
+      groupCount,
+      teamsCount: teamIds.length,
+    };
+  }
+
+  async moveTournamentTeamGroup(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+    teamId: string,
+    targetGroupName: string,
+  ): Promise<{ ok: true }> {
+    const actor = this.getUserByToken(token);
+    const tournament = this.mustGetTournamentBySlug(tournamentSlug);
+    const club = this.mustGetClub(tournament.clubId);
+    this.assertClubAdmin(actor.id, club.id);
+
+    const category = this.mustGetCategoryBySlug(tournament.id, categorySlug);
+    const groups = this.listGroupsForCategory(category.id);
+    if (groups.length === 0) {
+      throw new DomainError("VALIDATION_ERROR", "Primero debes generar grupos.");
+    }
+
+    if (this.listGroupMatchesForCategory(category.id).length > 0) {
+      throw new DomainError("VALIDATION_ERROR", "No puedes mover equipos después de generar partidos.");
+    }
+
+    const normalizedTargetName = targetGroupName.trim().toUpperCase();
+    if (!normalizedTargetName) {
+      throw new DomainError("VALIDATION_ERROR", "Grupo destino inválido.");
+    }
+
+    const targetGroupId = this.mustGetGroupNameMap(category.id).get(normalizedTargetName);
+    if (!targetGroupId) {
+      throw new DomainError("NOT_FOUND", "Grupo destino no encontrado.");
+    }
+
+    const sourceGroup = groups.find((group) => group.teamIds.includes(teamId));
+    if (!sourceGroup) {
+      throw new DomainError("VALIDATION_ERROR", "El equipo no pertenece a ningún grupo.");
+    }
+
+    if (sourceGroup.id === targetGroupId) {
+      return { ok: true };
+    }
+
+    const targetGroup = this.tournamentGroups.get(targetGroupId);
+    if (!targetGroup) {
+      throw new DomainError("NOT_FOUND", "Grupo destino no encontrado.");
+    }
+
+    const now = nowIso();
+    if (targetGroup.teamIds.length >= 4) {
+      const replacementTeamId = targetGroup.teamIds[0];
+      if (!replacementTeamId) {
+        throw new DomainError("VALIDATION_ERROR", "No fue posible completar el cambio de grupo.");
+      }
+
+      sourceGroup.teamIds = [...sourceGroup.teamIds.filter((id) => id !== teamId), replacementTeamId];
+      sourceGroup.updatedAt = now;
+      targetGroup.teamIds = [...targetGroup.teamIds.filter((id) => id !== replacementTeamId), teamId];
+      targetGroup.updatedAt = now;
+    } else {
+      sourceGroup.teamIds = sourceGroup.teamIds.filter((id) => id !== teamId);
+      sourceGroup.updatedAt = now;
+      targetGroup.teamIds = [...targetGroup.teamIds, teamId];
+      targetGroup.updatedAt = now;
+    }
+
+    this.tournamentGroups.set(sourceGroup.id, sourceGroup);
+    this.tournamentGroups.set(targetGroup.id, targetGroup);
+    this.mustGetGroupsByCategory(category.id).set(sourceGroup.id, sourceGroup);
+    this.mustGetGroupsByCategory(category.id).set(targetGroup.id, targetGroup);
+
+    return { ok: true };
+  }
+
+  async generateTournamentGroupMatches(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+  ): Promise<{ groupsCount: number; matchesCount: number }> {
+    const actor = this.getUserByToken(token);
+    const tournament = this.mustGetTournamentBySlug(tournamentSlug);
+    const club = this.mustGetClub(tournament.clubId);
+    this.assertClubAdmin(actor.id, club.id);
+
+    const category = this.mustGetCategoryBySlug(tournament.id, categorySlug);
+    const groups = this.listGroupsForCategory(category.id);
+    if (groups.length === 0) {
+      throw new DomainError("VALIDATION_ERROR", "Primero debes generar grupos.");
+    }
+
+    if (this.listGroupMatchesForCategory(category.id).length > 0) {
+      throw new DomainError("VALIDATION_ERROR", "Los partidos de grupos ya fueron generados.");
+    }
+
+    if (groups.some((group) => group.teamIds.length !== 4)) {
+      throw new DomainError("VALIDATION_ERROR", "Todos los grupos deben tener 4 equipos antes de generar partidos.");
+    }
+
+    const now = nowIso();
+    const matchesByCategory = this.mustGetMatchesByCategory(category.id);
+
+    groups.forEach((group) => {
+      GROUP_MATCH_PAIRS.forEach(([aIndex, bIndex], pairIndex) => {
+        const teamAId = group.teamIds[aIndex];
+        const teamBId = group.teamIds[bIndex];
+        if (!teamAId || !teamBId) {
+          throw new DomainError("VALIDATION_ERROR", "Grupo inválido para generar fixture.");
+        }
+
+        const matchId = randomUUID();
+        const match: TournamentMatchRecord = {
+          id: matchId,
+          tournamentId: tournament.id,
+          categoryId: category.id,
+          phase: "group",
+          groupId: group.id,
+          order: pairIndex + 1,
+          teamAId,
+          teamBId,
+          status: "pending",
+          createdByUserId: actor.id,
+          createdAt: now,
+          updatedAt: now,
+        };
+
+        this.tournamentMatches.set(matchId, match);
+        matchesByCategory.set(matchId, match);
+        this.mustGetMatchesByGroup(group.id).set(matchId, match);
+      });
+    });
+
+    return {
+      groupsCount: groups.length,
+      matchesCount: groups.length * GROUP_MATCH_PAIRS.length,
     };
   }
 
@@ -1004,6 +1271,7 @@ export class PadelService implements BackendPadelService {
 
     const tournament = this.mustGetTournamentBySlug(tournamentSlug);
     const category = this.mustGetCategoryBySlug(tournament.id, categorySlug);
+    this.assertCategoryNotFrozen(category.id);
 
     const active = this.findActiveRegistration(category.id, actor.id);
     if (active) {
@@ -1071,6 +1339,7 @@ export class PadelService implements BackendPadelService {
     if (registration.primaryUserId !== actor.id) {
       throw new DomainError("FORBIDDEN", "No puedes cancelar esta inscripción.");
     }
+    this.assertCategoryNotFrozen(registration.categoryId);
 
     if (registration.status !== "cancelled") {
       const now = nowIso();
@@ -1109,6 +1378,7 @@ export class PadelService implements BackendPadelService {
     if (!tournament || !category) {
       throw new DomainError("NOT_FOUND", "Categoría no encontrada.");
     }
+    this.assertCategoryNotFrozen(category.id);
 
     this.assertClubAdmin(actor.id, tournament.clubId);
 
@@ -1540,6 +1810,178 @@ export class PadelService implements BackendPadelService {
       waitlist: rows.filter((row) => row.status === "waitlist").length,
       cancelled: rows.filter((row) => row.status === "cancelled").length,
     };
+  }
+
+  private assertCategoryNotFrozen(categoryId: string) {
+    if (this.hasGeneratedGroups(categoryId)) {
+      throw new DomainError(
+        "TOURNAMENT_CATEGORY_FROZEN",
+        "La categoría ya está cerrada para cambios de inscripción.",
+      );
+    }
+  }
+
+  private hasGeneratedGroups(categoryId: string): boolean {
+    return this.listGroupsForCategory(categoryId).length > 0;
+  }
+
+  private listGroupsForCategory(categoryId: string): TournamentGroupRecord[] {
+    const groups = this.groupsByCategory.get(categoryId);
+    if (!groups) {
+      return [];
+    }
+    return [...groups.values()].sort((a, b) => a.order - b.order);
+  }
+
+  private mustGetGroupsByCategory(categoryId: string): Map<string, TournamentGroupRecord> {
+    let groups = this.groupsByCategory.get(categoryId);
+    if (!groups) {
+      groups = new Map();
+      this.groupsByCategory.set(categoryId, groups);
+    }
+    return groups;
+  }
+
+  private mustGetGroupNameMap(categoryId: string): Map<string, string> {
+    let byName = this.groupByCategoryName.get(categoryId);
+    if (!byName) {
+      byName = new Map();
+      this.groupByCategoryName.set(categoryId, byName);
+    }
+    return byName;
+  }
+
+  private listGroupMatchesForCategory(categoryId: string): TournamentMatchRecord[] {
+    const matches = this.matchesByCategory.get(categoryId);
+    if (!matches) {
+      return [];
+    }
+
+    const groupOrderById = new Map(this.listGroupsForCategory(categoryId).map((group) => [group.id, group.order] as const));
+    return [...matches.values()]
+      .filter((match) => match.phase === "group")
+      .sort((a, b) => {
+        const orderA = groupOrderById.get(a.groupId) ?? Number.MAX_SAFE_INTEGER;
+        const orderB = groupOrderById.get(b.groupId) ?? Number.MAX_SAFE_INTEGER;
+        if (orderA !== orderB) {
+          return orderA - orderB;
+        }
+        return a.order - b.order;
+      });
+  }
+
+  private mustGetMatchesByCategory(categoryId: string): Map<string, TournamentMatchRecord> {
+    let matches = this.matchesByCategory.get(categoryId);
+    if (!matches) {
+      matches = new Map();
+      this.matchesByCategory.set(categoryId, matches);
+    }
+    return matches;
+  }
+
+  private mustGetMatchesByGroup(groupId: string): Map<string, TournamentMatchRecord> {
+    let matches = this.matchesByGroup.get(groupId);
+    if (!matches) {
+      matches = new Map();
+      this.matchesByGroup.set(groupId, matches);
+    }
+    return matches;
+  }
+
+  private toGroupTeamView(teamId: string): TournamentGroupTeamView | null {
+    const team = this.teams.get(teamId);
+    if (!team) {
+      return null;
+    }
+    const user = this.users.get(team.primaryUserId);
+    return {
+      id: team.id,
+      teamName: team.teamName,
+      primaryAlias: user?.alias ?? null,
+      primaryPhone: user?.phoneE164 ?? null,
+    };
+  }
+
+  private toGroupMatchView(match: TournamentMatchRecord): TournamentGroupMatchView | null {
+    const teamA = this.toGroupTeamView(match.teamAId);
+    const teamB = this.toGroupTeamView(match.teamBId);
+    if (!teamA || !teamB) {
+      return null;
+    }
+    return {
+      id: match.id,
+      order: match.order,
+      status: match.status,
+      teamA,
+      teamB,
+    };
+  }
+
+  private buildCategoryGroupStage(categoryId: string): TournamentGroupStage | null {
+    const groups = this.listGroupsForCategory(categoryId);
+    if (groups.length === 0) {
+      return null;
+    }
+
+    const matches = this.listGroupMatchesForCategory(categoryId);
+
+    return {
+      generatedAt: groups[0]?.createdAt ?? nowIso(),
+      groups: groups.map((group) => ({
+        id: group.id,
+        name: group.name,
+        order: group.order,
+        teams: group.teamIds
+          .map((teamId) => this.toGroupTeamView(teamId))
+          .filter((team): team is TournamentGroupTeamView => Boolean(team)),
+      })),
+      matchesByGroup: groups.map((group) => ({
+        groupId: group.id,
+        groupName: group.name,
+        matches: matches
+          .filter((match) => match.groupId === group.id)
+          .map((match) => this.toGroupMatchView(match))
+          .filter((match): match is TournamentGroupMatchView => Boolean(match)),
+      })),
+    };
+  }
+
+  private filterMyGroupMatches(
+    categoryId: string,
+    myTeamId: string,
+  ): PublicTournamentCategoryDetail["myGroupMatches"] {
+    const groupNameById = new Map(this.listGroupsForCategory(categoryId).map((group) => [group.id, group.name] as const));
+
+    return this.listGroupMatchesForCategory(categoryId)
+      .filter((match) => match.teamAId === myTeamId || match.teamBId === myTeamId)
+      .map((match) => {
+        const view = this.toGroupMatchView(match);
+        if (!view) {
+          return null;
+        }
+        return {
+          ...view,
+          groupName: groupNameById.get(match.groupId) ?? "",
+        };
+      })
+      .filter((match): match is PublicTournamentCategoryDetail["myGroupMatches"][number] => Boolean(match));
+  }
+
+  private shuffle<T>(values: T[]): T[] {
+    for (let index = values.length - 1; index > 0; index -= 1) {
+      const randomIndex = Math.floor(Math.random() * (index + 1));
+      const next = values[index];
+      values[index] = values[randomIndex] as T;
+      values[randomIndex] = next as T;
+    }
+    return values;
+  }
+
+  private groupNameFromOrder(order: number): string {
+    if (!Number.isInteger(order) || order < 1 || order > 26) {
+      throw new DomainError("VALIDATION_ERROR", "Orden de grupo inválido.");
+    }
+    return String.fromCharCode("A".charCodeAt(0) + order - 1);
   }
 
   private findActiveRegistration(categoryId: string, userId: string): TournamentRegistrationRecord | null {

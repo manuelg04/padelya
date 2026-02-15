@@ -64,3 +64,14 @@ export function buildCategoryReminderMessage(
     `Revisa estado / lista de espera: ${categoryUrl}`,
   ].join("\n");
 }
+
+export function buildRoundRobinPairsForGroupOfFour<T>(teams: readonly [T, T, T, T]): Array<readonly [T, T]> {
+  return [
+    [teams[0], teams[1]],
+    [teams[2], teams[3]],
+    [teams[0], teams[2]],
+    [teams[1], teams[3]],
+    [teams[0], teams[3]],
+    [teams[1], teams[2]],
+  ];
+}

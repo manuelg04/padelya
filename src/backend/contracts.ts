@@ -66,6 +66,24 @@ export interface BackendPadelService {
     categorySlug: string,
   ): MaybePromise<AdminCategoryDashboard>;
   createTournament(token: string, input: CreateTournamentInput): MaybePromise<{ tournamentSlug: string; categorySlugs: string[] }>;
+  generateTournamentGroups(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+    input?: { groupCount?: number },
+  ): MaybePromise<{ groupCount: number; teamsCount: number }>;
+  moveTournamentTeamGroup(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+    teamId: string,
+    targetGroupName: string,
+  ): MaybePromise<{ ok: true }>;
+  generateTournamentGroupMatches(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+  ): MaybePromise<{ groupsCount: number; matchesCount: number }>;
   registerForCategory(
     token: string,
     tournamentSlug: string,

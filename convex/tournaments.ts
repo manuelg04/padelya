@@ -1,6 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { QueryCtx, MutationCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 
 import { getOptionalUser, requireOrCreateUser, requireUser } from "./padel/auth";
 import { bogotaLocalToUtcIso, nowIso } from "./padel/date_time";
@@ -14,13 +15,35 @@ import {
   getTeamById,
   getTournamentBySlug as getTournamentBySlugFromRepo,
   getTournamentCategoryBySlug as getTournamentCategoryBySlugFromRepo,
+  getTournamentGroupByCategoryName,
   listClubMembershipsForUser,
+  listConfirmedRegistrationsByCategory,
   listRegistrationsByCategory,
   listTournamentCategories,
+  listTournamentGroupsByCategory,
+  listTournamentMatchesByCategoryPhase,
 } from "./tournaments/repo";
 import { makeUniqueSlug, slugify } from "./tournaments/slugs";
 
 type ReadCtx = QueryCtx | MutationCtx;
+
+type TournamentTeamView = {
+  id: string;
+  teamName: string;
+  primaryAlias: string | null;
+  primaryPhone: string | null;
+};
+
+const GROUP_MATCH_PAIRS: ReadonlyArray<readonly [number, number]> = [
+  [0, 1],
+  [2, 3],
+  [0, 2],
+  [1, 3],
+  [0, 3],
+  [1, 2],
+] as const;
+
+const ALLOWED_GROUP_TEAM_COUNTS = new Set([8, 12, 16]);
 
 function ensureNonEmpty(value: string): string {
   const trimmed = value.trim();
@@ -28,6 +51,45 @@ function ensureNonEmpty(value: string): string {
     throw new Error("VALIDATION_ERROR");
   }
   return trimmed;
+}
+
+function ensurePositiveInteger(value: number): number {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error("VALIDATION_ERROR");
+  }
+  return value;
+}
+
+function groupLabelForOrder(order: number): string {
+  if (!Number.isInteger(order) || order < 1 || order > 26) {
+    throw new Error("VALIDATION_ERROR");
+  }
+  return String.fromCharCode("A".charCodeAt(0) + order - 1);
+}
+
+function shuffleInPlace<T>(values: T[]): T[] {
+  for (let index = values.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+    const next = values[index];
+    values[index] = values[randomIndex] as T;
+    values[randomIndex] = next as T;
+  }
+  return values;
+}
+
+function buildRandomGroups(teamIds: Id<"tournamentTeams">[], groupCount: number): Id<"tournamentTeams">[][] {
+  const shuffled = shuffleInPlace([...teamIds]);
+  const groups: Id<"tournamentTeams">[][] = Array.from({ length: groupCount }, () => []);
+
+  shuffled.forEach((teamId, index) => {
+    groups[index % groupCount]?.push(teamId);
+  });
+
+  if (groups.some((group) => group.length !== 4)) {
+    throw new Error("VALIDATION_ERROR");
+  }
+
+  return groups;
 }
 
 async function requireTournamentBySlugOrThrow(tournamentSlug: string, ctx: ReadCtx) {
@@ -72,6 +134,159 @@ function normalizeOptionalText(value: string | undefined): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+async function isCategoryFrozen(ctx: ReadCtx, categoryId: Id<"tournamentCategories">): Promise<boolean> {
+  const groups = await listTournamentGroupsByCategory(ctx, categoryId);
+  return groups.length > 0;
+}
+
+async function assertCategoryNotFrozen(ctx: ReadCtx, categoryId: Id<"tournamentCategories">): Promise<void> {
+  if (await isCategoryFrozen(ctx, categoryId)) {
+    throw new Error("TOURNAMENT_CATEGORY_FROZEN");
+  }
+}
+
+async function buildTeamViewsById(
+  ctx: ReadCtx,
+  teamIds: Id<"tournamentTeams">[],
+): Promise<Map<Id<"tournamentTeams">, TournamentTeamView>> {
+  const uniqueTeamIds = [...new Set(teamIds)];
+
+  const pairs = await Promise.all(
+    uniqueTeamIds.map(async (teamId) => {
+      const team = await getTeamById(ctx, teamId);
+      if (!team) {
+        return null;
+      }
+      const primary = await ctx.db.get(team.primaryUserId);
+      return [
+        teamId,
+        {
+          id: String(team._id),
+          teamName: team.teamName,
+          primaryAlias: primary?.alias ?? null,
+          primaryPhone: primary?.phoneE164 ?? null,
+        },
+      ] as const;
+    }),
+  );
+
+  return new Map(
+    pairs.filter((entry): entry is readonly [Id<"tournamentTeams">, TournamentTeamView] => Boolean(entry)),
+  );
+}
+
+async function buildCategoryGroupStage(
+  ctx: ReadCtx,
+  categoryId: Id<"tournamentCategories">,
+  myTeamId?: Id<"tournamentTeams">,
+) {
+  const groups = await listTournamentGroupsByCategory(ctx, categoryId);
+  if (groups.length === 0) {
+    return {
+      groupStage: null,
+      myGroupMatches: [] as Array<{
+        id: string;
+        groupName: string;
+        order: number;
+        teamA: TournamentTeamView;
+        teamB: TournamentTeamView;
+        status: "pending";
+      }>,
+    };
+  }
+
+  const matches = await listTournamentMatchesByCategoryPhase(ctx, categoryId, "group");
+  const teamIds = groups.flatMap((group) => group.teamIds);
+  const matchTeamIds = matches.flatMap((match) => [match.teamAId, match.teamBId]);
+  const teamViews = await buildTeamViewsById(ctx, [...teamIds, ...matchTeamIds]);
+
+  const groupViews = groups.map((group) => ({
+    id: String(group._id),
+    name: group.name,
+    order: group.order,
+    teams: group.teamIds
+      .map((teamId) => teamViews.get(teamId) ?? null)
+      .filter((team): team is TournamentTeamView => Boolean(team)),
+  }));
+
+  const groupNameById = new Map(groups.map((group) => [group._id, group.name] as const));
+
+  const myGroupMatches = matches
+    .filter((match) => myTeamId && (match.teamAId === myTeamId || match.teamBId === myTeamId))
+    .map((match) => {
+      const teamA = teamViews.get(match.teamAId);
+      const teamB = teamViews.get(match.teamBId);
+      if (!teamA || !teamB) {
+        return null;
+      }
+      return {
+        id: String(match._id),
+        groupName: groupNameById.get(match.groupId) ?? "",
+        order: match.order,
+        teamA,
+        teamB,
+        status: match.status,
+      };
+    })
+    .filter(
+      (
+        entry,
+      ): entry is {
+        id: string;
+        groupName: string;
+        order: number;
+        teamA: TournamentTeamView;
+        teamB: TournamentTeamView;
+        status: "pending";
+      } => Boolean(entry),
+    );
+
+  const matchesByGroup = groups.map((group) => {
+    const groupMatches = matches
+      .filter((match) => match.groupId === group._id)
+      .map((match) => {
+        const teamA = teamViews.get(match.teamAId);
+        const teamB = teamViews.get(match.teamBId);
+        if (!teamA || !teamB) {
+          return null;
+        }
+        return {
+          id: String(match._id),
+          order: match.order,
+          status: match.status,
+          teamA,
+          teamB,
+        };
+      })
+      .filter(
+        (
+          entry,
+        ): entry is {
+          id: string;
+          order: number;
+          status: "pending";
+          teamA: TournamentTeamView;
+          teamB: TournamentTeamView;
+        } => Boolean(entry),
+      );
+
+    return {
+      groupId: String(group._id),
+      groupName: group.name,
+      matches: groupMatches,
+    };
+  });
+
+  return {
+    groupStage: {
+      generatedAt: groups[0]?.createdAt ?? nowIso(),
+      groups: groupViews,
+      matchesByGroup,
+    },
+    myGroupMatches,
+  };
 }
 
 export const getTournamentBySlug = query({
@@ -147,11 +362,15 @@ export const getTournamentCategoryBySlug = query({
       createdAt: string;
       updatedAt: string;
     } | null = null;
+    let myTeamId: Id<"tournamentTeams"> | undefined;
 
     if (user) {
       const active = await findActiveRegistrationForPrimary(ctx, category._id, user._id);
       if (active) {
         const team = await getTeamById(ctx, active.teamId);
+        if (team) {
+          myTeamId = team._id;
+        }
         myRegistration = {
           id: String(active._id),
           status: active.status,
@@ -162,6 +381,8 @@ export const getTournamentCategoryBySlug = query({
         };
       }
     }
+
+    const stage = await buildCategoryGroupStage(ctx, category._id, myTeamId);
 
     return {
       tournament: {
@@ -189,6 +410,8 @@ export const getTournamentCategoryBySlug = query({
         counts,
       },
       myRegistration,
+      groupStage: stage.groupStage,
+      myGroupMatches: stage.myGroupMatches,
     };
   },
 });
@@ -425,6 +648,210 @@ export const createTournament = mutation({
   },
 });
 
+export const generateCategoryGroups = mutation({
+  args: {
+    tournamentSlug: v.string(),
+    categorySlug: v.string(),
+    groupCount: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireUser(ctx);
+    const tournament = await requireTournamentBySlugOrThrow(args.tournamentSlug, ctx);
+    const club = await ctx.db.get(tournament.clubId);
+    if (!club) {
+      throw new Error("NOT_FOUND");
+    }
+
+    await assertClubAdmin(ctx, club._id, actor._id);
+
+    const category = await requireCategoryBySlugOrThrow(ctx, tournament._id, args.categorySlug);
+    if (await isCategoryFrozen(ctx, category._id)) {
+      throw new Error("VALIDATION_ERROR");
+    }
+
+    const confirmed = await listConfirmedRegistrationsByCategory(ctx, category._id);
+    const teamIds = confirmed.map((registration) => registration.teamId);
+
+    if (!ALLOWED_GROUP_TEAM_COUNTS.has(teamIds.length)) {
+      throw new Error("VALIDATION_ERROR");
+    }
+
+    const defaultGroupCount = teamIds.length / 4;
+    const groupCount = args.groupCount === undefined ? defaultGroupCount : ensurePositiveInteger(args.groupCount);
+
+    if (groupCount !== defaultGroupCount) {
+      throw new Error("VALIDATION_ERROR");
+    }
+
+    const groups = buildRandomGroups(teamIds, groupCount);
+    const now = nowIso();
+
+    await Promise.all(
+      groups.map(async (teamGroup, index) => {
+        await ctx.db.insert("tournamentGroups", {
+          tournamentId: tournament._id,
+          categoryId: category._id,
+          name: groupLabelForOrder(index + 1),
+          order: index + 1,
+          teamIds: teamGroup,
+          createdByUserId: actor._id,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }),
+    );
+
+    return {
+      groupCount,
+      teamsCount: teamIds.length,
+    };
+  },
+});
+
+export const moveCategoryTeamToGroup = mutation({
+  args: {
+    tournamentSlug: v.string(),
+    categorySlug: v.string(),
+    teamId: v.id("tournamentTeams"),
+    targetGroupName: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireUser(ctx);
+    const tournament = await requireTournamentBySlugOrThrow(args.tournamentSlug, ctx);
+    const club = await ctx.db.get(tournament.clubId);
+    if (!club) {
+      throw new Error("NOT_FOUND");
+    }
+
+    await assertClubAdmin(ctx, club._id, actor._id);
+
+    const category = await requireCategoryBySlugOrThrow(ctx, tournament._id, args.categorySlug);
+    const groups = await listTournamentGroupsByCategory(ctx, category._id);
+    if (groups.length === 0) {
+      throw new Error("VALIDATION_ERROR");
+    }
+
+    const matches = await listTournamentMatchesByCategoryPhase(ctx, category._id, "group");
+    if (matches.length > 0) {
+      throw new Error("VALIDATION_ERROR");
+    }
+
+    const normalizedTargetName = ensureNonEmpty(args.targetGroupName).toUpperCase();
+    const target = await getTournamentGroupByCategoryName(ctx, category._id, normalizedTargetName);
+    if (!target) {
+      throw new Error("NOT_FOUND");
+    }
+
+    const source = groups.find((group) => group.teamIds.some((teamId) => teamId === args.teamId));
+    if (!source) {
+      throw new Error("VALIDATION_ERROR");
+    }
+
+    if (source._id === target._id) {
+      return { ok: true };
+    }
+
+    const now = nowIso();
+
+    if (target.teamIds.length >= 4) {
+      const replacementTeamId = target.teamIds[0];
+      if (!replacementTeamId) {
+        throw new Error("VALIDATION_ERROR");
+      }
+
+      await ctx.db.patch(source._id, {
+        teamIds: [...source.teamIds.filter((teamId) => teamId !== args.teamId), replacementTeamId],
+        updatedAt: now,
+      });
+
+      await ctx.db.patch(target._id, {
+        teamIds: [...target.teamIds.filter((teamId) => teamId !== replacementTeamId), args.teamId],
+        updatedAt: now,
+      });
+      return { ok: true };
+    }
+
+    await ctx.db.patch(source._id, {
+      teamIds: source.teamIds.filter((teamId) => teamId !== args.teamId),
+      updatedAt: now,
+    });
+
+    await ctx.db.patch(target._id, {
+      teamIds: [...target.teamIds, args.teamId],
+      updatedAt: now,
+    });
+
+    return { ok: true };
+  },
+});
+
+export const generateCategoryGroupMatches = mutation({
+  args: {
+    tournamentSlug: v.string(),
+    categorySlug: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireUser(ctx);
+    const tournament = await requireTournamentBySlugOrThrow(args.tournamentSlug, ctx);
+    const club = await ctx.db.get(tournament.clubId);
+    if (!club) {
+      throw new Error("NOT_FOUND");
+    }
+
+    await assertClubAdmin(ctx, club._id, actor._id);
+
+    const category = await requireCategoryBySlugOrThrow(ctx, tournament._id, args.categorySlug);
+    const groups = await listTournamentGroupsByCategory(ctx, category._id);
+    if (groups.length === 0) {
+      throw new Error("VALIDATION_ERROR");
+    }
+
+    const existingMatches = await listTournamentMatchesByCategoryPhase(ctx, category._id, "group");
+    if (existingMatches.length > 0) {
+      throw new Error("VALIDATION_ERROR");
+    }
+
+    if (groups.some((group) => group.teamIds.length !== 4)) {
+      throw new Error("VALIDATION_ERROR");
+    }
+
+    const now = nowIso();
+
+    await Promise.all(
+      groups.map(async (group) => {
+        await Promise.all(
+          GROUP_MATCH_PAIRS.map(async ([teamAIndex, teamBIndex], orderIndex) => {
+            const teamAId = group.teamIds[teamAIndex];
+            const teamBId = group.teamIds[teamBIndex];
+            if (!teamAId || !teamBId) {
+              throw new Error("VALIDATION_ERROR");
+            }
+
+            await ctx.db.insert("tournamentMatches", {
+              tournamentId: tournament._id,
+              categoryId: category._id,
+              phase: "group",
+              groupId: group._id,
+              order: orderIndex + 1,
+              teamAId,
+              teamBId,
+              status: "pending",
+              createdByUserId: actor._id,
+              createdAt: now,
+              updatedAt: now,
+            });
+          }),
+        );
+      }),
+    );
+
+    return {
+      groupsCount: groups.length,
+      matchesCount: groups.length * GROUP_MATCH_PAIRS.length,
+    };
+  },
+});
+
 export const registerForCategory = mutation({
   args: {
     tournamentSlug: v.string(),
@@ -440,6 +867,7 @@ export const registerForCategory = mutation({
 
     const tournament = await requireTournamentBySlugOrThrow(args.tournamentSlug, ctx);
     const category = await requireCategoryBySlugOrThrow(ctx, tournament._id, args.categorySlug);
+    await assertCategoryNotFrozen(ctx, category._id);
 
     const existing = await findActiveRegistrationForPrimary(ctx, category._id, user._id);
     if (existing) {
@@ -489,6 +917,8 @@ export const cancelMyRegistration = mutation({
       throw new Error("NOT_FOUND");
     }
 
+    await assertCategoryNotFrozen(ctx, registration.categoryId);
+
     if (registration.primaryUserId !== user._id) {
       throw new Error("FORBIDDEN");
     }
@@ -527,6 +957,8 @@ export const setRegistrationStatus = mutation({
     if (!category) {
       throw new Error("NOT_FOUND");
     }
+
+    await assertCategoryNotFrozen(ctx, category._id);
 
     const tournament = await ctx.db.get(registration.tournamentId);
     if (!tournament) {

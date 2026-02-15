@@ -175,4 +175,35 @@ export default defineSchema({
     .index("by_category_primary", ["categoryId", "primaryUserId"])
     .index("by_tournament_category", ["tournamentId", "categoryId"])
     .index("by_primary_created_at", ["primaryUserId", "createdAt"]),
+
+  tournamentGroups: defineTable({
+    tournamentId: v.id("tournaments"),
+    categoryId: v.id("tournamentCategories"),
+    name: v.string(),
+    order: v.number(),
+    teamIds: v.array(v.id("tournamentTeams")),
+    createdByUserId: v.id("users"),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+  })
+    .index("by_category", ["categoryId"])
+    .index("by_category_name", ["categoryId", "name"])
+    .index("by_tournament_category", ["tournamentId", "categoryId"]),
+
+  tournamentMatches: defineTable({
+    tournamentId: v.id("tournaments"),
+    categoryId: v.id("tournamentCategories"),
+    phase: v.union(v.literal("group")),
+    groupId: v.id("tournamentGroups"),
+    order: v.number(),
+    teamAId: v.id("tournamentTeams"),
+    teamBId: v.id("tournamentTeams"),
+    status: v.union(v.literal("pending")),
+    createdByUserId: v.id("users"),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+  })
+    .index("by_category_phase", ["categoryId", "phase"])
+    .index("by_group", ["groupId"])
+    .index("by_tournament_category_phase", ["tournamentId", "categoryId", "phase"]),
 });

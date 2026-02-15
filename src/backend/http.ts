@@ -93,6 +93,7 @@ function mapDomainCodeToStatus(code: DomainError["code"]): number {
     case "ALIAS_REQUIRED":
     case "TOURNAMENT_ALREADY_REGISTERED":
     case "TOURNAMENT_CAPACITY_REACHED":
+    case "TOURNAMENT_CATEGORY_FROZEN":
       return 400;
     default:
       return 400;

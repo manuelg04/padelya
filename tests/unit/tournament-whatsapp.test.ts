@@ -5,6 +5,7 @@ import {
   buildCategoryConfirmedListMessage,
   buildCategoryPaymentMessage,
   buildCategoryReminderMessage,
+  buildRoundRobinPairsForGroupOfFour,
   buildTournamentCategoryUrl,
 } from "@/src/domain/tournament";
 import type { AdminCategoryDashboard, PublicTournamentCategoryDetail } from "@/src/domain/types";
@@ -40,6 +41,8 @@ const categoryDetail: PublicTournamentCategoryDetail = {
     },
   },
   myRegistration: null,
+  groupStage: null,
+  myGroupMatches: [],
 };
 
 const dashboard: AdminCategoryDashboard = {
@@ -101,5 +104,20 @@ describe("tournament WhatsApp messages", () => {
     expect(confirmed).toContain("Confirmados 10/16");
     expect(payment).toContain("Nequi 3000000000");
     expect(reminder).toContain("Recordatorio");
+  });
+
+  it("builds 6 unique round robin pairings for 4 teams", () => {
+    const pairs = buildRoundRobinPairsForGroupOfFour(["A", "B", "C", "D"]);
+    expect(pairs).toHaveLength(6);
+
+    const unique = new Set(pairs.map((pair) => [...pair].sort().join("-")));
+    expect(unique.size).toBe(6);
+
+    const appearances = new Map<string, number>();
+    pairs.flat().forEach((team) => appearances.set(team, (appearances.get(team) ?? 0) + 1));
+    expect(appearances.get("A")).toBe(3);
+    expect(appearances.get("B")).toBe(3);
+    expect(appearances.get("C")).toBe(3);
+    expect(appearances.get("D")).toBe(3);
   });
 });

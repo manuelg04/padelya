@@ -326,6 +326,64 @@ export async function createTournament(
   return parseJson(response);
 }
 
+export async function generateAdminTournamentGroups(
+  token: string,
+  tournamentSlug: string,
+  categorySlug: string,
+  input?: { groupCount?: number },
+): Promise<{ groupCount: number; teamsCount: number }> {
+  const response = await fetch(
+    `/api/admin/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}/groups`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(token),
+      },
+      body: JSON.stringify(input ?? {}),
+    },
+  );
+  return parseJson(response);
+}
+
+export async function moveAdminTournamentTeamGroup(
+  token: string,
+  tournamentSlug: string,
+  categorySlug: string,
+  teamId: string,
+  targetGroupName: string,
+): Promise<{ ok: true }> {
+  const response = await fetch(
+    `/api/admin/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}/groups/assignment`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(token),
+      },
+      body: JSON.stringify({ teamId, targetGroupName }),
+    },
+  );
+  return parseJson(response);
+}
+
+export async function generateAdminTournamentGroupMatches(
+  token: string,
+  tournamentSlug: string,
+  categorySlug: string,
+): Promise<{ groupsCount: number; matchesCount: number }> {
+  const response = await fetch(
+    `/api/admin/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}/group-matches`,
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders(token),
+      },
+    },
+  );
+  return parseJson(response);
+}
+
 export async function getAdminTournamentCategoryDashboard(
   token: string,
   tournamentSlug: string,

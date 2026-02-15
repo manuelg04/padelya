@@ -12,7 +12,8 @@ export type DomainErrorCode =
   | "OTP_INVALID"
   | "OTP_EXPIRED"
   | "TOURNAMENT_ALREADY_REGISTERED"
-  | "TOURNAMENT_CAPACITY_REACHED";
+  | "TOURNAMENT_CAPACITY_REACHED"
+  | "TOURNAMENT_CATEGORY_FROZEN";
 
 export class DomainError extends Error {
   constructor(

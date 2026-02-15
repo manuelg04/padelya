@@ -41,6 +41,7 @@ const DOMAIN_ERROR_MESSAGES: Record<DomainErrorCode, string> = {
   OTP_EXPIRED: "Código OTP expirado.",
   TOURNAMENT_ALREADY_REGISTERED: "Ya tienes una inscripción activa en esta categoría.",
   TOURNAMENT_CAPACITY_REACHED: "No hay cupos disponibles para confirmar.",
+  TOURNAMENT_CATEGORY_FROZEN: "La categoría ya está cerrada para cambios de inscripción.",
   FORBIDDEN: "No autorizado para esta operación.",
 };
 
@@ -371,6 +372,58 @@ export class ConvexPadelService implements BackendPadelService {
   ): Promise<{ tournamentSlug: string; categorySlugs: string[] }> {
     try {
       return await this.createAuthedClient(token).mutation(api.tournaments.createTournament, input);
+    } catch (error) {
+      return normalizeError(error);
+    }
+  }
+
+  async generateTournamentGroups(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+    input?: { groupCount?: number },
+  ): Promise<{ groupCount: number; teamsCount: number }> {
+    try {
+      return await this.createAuthedClient(token).mutation(api.tournaments.generateCategoryGroups, {
+        tournamentSlug,
+        categorySlug,
+        groupCount: input?.groupCount,
+      });
+    } catch (error) {
+      return normalizeError(error);
+    }
+  }
+
+  async moveTournamentTeamGroup(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+    teamId: string,
+    targetGroupName: string,
+  ): Promise<{ ok: true }> {
+    try {
+      await this.createAuthedClient(token).mutation(api.tournaments.moveCategoryTeamToGroup, {
+        tournamentSlug,
+        categorySlug,
+        teamId: teamId as Id<"tournamentTeams">,
+        targetGroupName,
+      });
+      return { ok: true };
+    } catch (error) {
+      return normalizeError(error);
+    }
+  }
+
+  async generateTournamentGroupMatches(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+  ): Promise<{ groupsCount: number; matchesCount: number }> {
+    try {
+      return await this.createAuthedClient(token).mutation(api.tournaments.generateCategoryGroupMatches, {
+        tournamentSlug,
+        categorySlug,
+      });
     } catch (error) {
       return normalizeError(error);
     }
