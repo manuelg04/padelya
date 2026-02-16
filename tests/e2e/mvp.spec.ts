@@ -1,5 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
+const E2E_BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3000";
+
 async function completeAuth(page: Page, phone: string, alias: string, redirect: string) {
   await page.goto(`/login?redirect=${encodeURIComponent(redirect)}`);
   await page.getByTestId("phone-input").fill(phone);
@@ -174,7 +176,7 @@ test("happy path P0: crear, ver link público, join/leave, cancelado, copiar res
 
   const matchUrl = page.url();
   const publicPage = await browser.newContext({
-    baseURL: "http://127.0.0.1:3000",
+    baseURL: E2E_BASE_URL,
     permissions: ["clipboard-read", "clipboard-write"],
     viewport: { width: 390, height: 844 },
   });
@@ -196,10 +198,11 @@ test("happy path P0: crear, ver link público, join/leave, cancelado, copiar res
   await publicTab.getByTestId("otp-input").fill("123456");
   await publicTab.getByTestId("verify-otp-btn").click();
 
-  await publicTab.waitForLoadState("networkidle");
+  await publicTab.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 15000 });
   if (publicTab.url().includes("/perfil")) {
     await publicTab.getByLabel("Alias").fill("Jugador Dos");
     await publicTab.getByRole("button", { name: "Guardar alias" }).click();
+    await publicTab.waitForURL((url) => !url.pathname.startsWith("/perfil"), { timeout: 15000 });
   }
 
   await expect(publicTab).toHaveURL(/\/partido\/[a-z0-9]+/i);
@@ -227,6 +230,133 @@ test("happy path P0: crear, ver link público, join/leave, cancelado, copiar res
   await expect(publicTab.getByTestId("join-btn")).toHaveCount(0);
 
   await publicPage.close();
+});
+
+test("onboarding usuario nuevo: OTP -> perfil -> regreso al flujo de creación", async ({ page }) => {
+  await page.goto("/crear");
+  await expect(page).toHaveURL(/\/login\?redirect=(%2Fcrear|\/crear)/);
+
+  await page.getByTestId("phone-input").fill("3011110000");
+  await page.getByTestId("send-otp-btn").click();
+  await expect(page.getByText("Código enviado por SMS.")).toBeVisible();
+
+  await page.getByTestId("otp-input").fill("123456");
+  await page.getByTestId("verify-otp-btn").click();
+
+  await expect(page).toHaveURL(/\/perfil\?redirect=(%2Fcrear|\/crear)/);
+  await expect(page.getByRole("heading", { name: "Tu perfil de jugador" })).toBeVisible();
+
+  await page.getByLabel("Alias").fill("Onboard Flow");
+  await page.getByRole("button", { name: "Guardar alias" }).click();
+
+  await expect(page).toHaveURL(/\/crear$/);
+  await expect(page.getByRole("heading", { name: "Crear partido" })).toBeVisible();
+});
+
+test("visitante sin autenticación puede ver partido compartido por link", async ({ request, browser }) => {
+  const organizerToken = await createApiUser(request, "3011110100", "Link Host");
+  const match = await createApiMatch(request, organizerToken, {
+    club: "Padel Link Publico",
+    startsAtLocal: "2030-03-03T20:00",
+    category: "4ta",
+    modality: "mixto",
+  });
+
+  const visitorContext = await browser.newContext({ baseURL: E2E_BASE_URL });
+  const visitorPage = await visitorContext.newPage();
+
+  await visitorPage.goto(`/partido/${match.publicId}`);
+  await expect(visitorPage.getByRole("heading", { name: "Confirmados" })).toBeVisible();
+  await expect(visitorPage.getByText("1/4")).toBeVisible();
+  await expect(visitorPage.getByText("Link Host")).toBeVisible();
+  await expect(visitorPage.getByRole("link", { name: "Inicia sesión para participar" })).toBeVisible();
+  await expect(visitorPage.getByTestId("join-btn")).toHaveCount(0);
+
+  await visitorContext.close();
+});
+
+test("watchlist: liberar cupo no autoasigna al observador y permite unirse manualmente", async ({
+  page,
+  request,
+}) => {
+  const organizer = await createApiUser(request, "3011110200", "Watchlist Org");
+  const match = await createApiMatch(request, organizer, {
+    club: "Padel Watchlist",
+    startsAtLocal: "2030-03-04T20:00",
+    category: "4ta",
+    modality: "mixto",
+  });
+
+  const p2 = await createApiUser(request, "3011110201", "Watchlist P2");
+  const p3 = await createApiUser(request, "3011110202", "Watchlist P3");
+  const p4 = await createApiUser(request, "3011110203", "Watchlist P4");
+  const watcherPhone = "3011110204";
+  const watcherAlias = "Watchlist Cola";
+  const watcherToken = await createApiUser(request, watcherPhone, watcherAlias);
+
+  await joinApiMatch(request, p2, match.publicId);
+  await joinApiMatch(request, p3, match.publicId);
+  await joinApiMatch(request, p4, match.publicId);
+
+  await completeAuth(page, watcherPhone, watcherAlias, `/partido/${match.publicId}`);
+  await expect(page).toHaveURL(new RegExp(`/partido/${match.publicId}$`));
+  await expect(page.getByText("Estado: Lleno (4/4)")).toBeVisible();
+
+  await page.getByTestId("follow-watch-btn").click();
+  await expect(page.getByTestId("unfollow-watch-btn")).toBeVisible();
+
+  await leaveApiMatch(request, p4, match.publicId);
+  await page.reload();
+
+  await expect(page.getByText("3/4")).toBeVisible();
+  await expect(page.getByTestId("join-btn")).toBeVisible();
+  await expect(page.getByText("Tú")).toHaveCount(0);
+  await expect(page.getByTestId("leave-btn")).toHaveCount(0);
+
+  const watcherViewResponse = await request.get(`/api/matches/${match.publicId}`, {
+    headers: {
+      Authorization: `Bearer ${watcherToken}`,
+    },
+  });
+  expect(watcherViewResponse.ok()).toBeTruthy();
+  const watcherViewPayload = (await watcherViewResponse.json()) as {
+    match: { canJoin: boolean; participants: Array<{ alias: string }> };
+  };
+  expect(watcherViewPayload.match.canJoin).toBe(true);
+  expect(watcherViewPayload.match.participants.some((participant) => participant.alias === watcherAlias)).toBe(false);
+
+  await page.getByTestId("join-btn").click();
+  await expect(page.getByText("Te uniste al partido.")).toBeVisible();
+  await expect(page.getByText("Estado: Lleno (4/4)")).toBeVisible();
+  await expect(page.getByRole("main").getByText(watcherAlias)).toBeVisible();
+});
+
+test("reservas futuras: feed muestra Mañana y fecha absoluta para días posteriores", async ({ page, request }) => {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const organizer = await createApiUser(request, "3011110300", "Future Org");
+  const tomorrowMatch = await createApiMatch(request, organizer, {
+    club: "Padel Manana Visible",
+    startsAtLocal: toBogotaDateTimeLocal(new Date(now + dayMs + 2 * 60 * 60 * 1000)),
+    category: "4ta",
+    modality: "mixto",
+  });
+  const futureMatch = await createApiMatch(request, organizer, {
+    club: "Padel Fecha Visible",
+    startsAtLocal: toBogotaDateTimeLocal(new Date(now + 3 * dayMs + 2 * 60 * 60 * 1000)),
+    category: "4ta",
+    modality: "fem",
+  });
+
+  await page.goto("/");
+  await expect(page.getByText("Padel Manana Visible")).toBeVisible();
+  await expect(page.getByText("Padel Fecha Visible")).toBeVisible();
+
+  const tomorrowCard = page.getByTestId(`open-match-card-${tomorrowMatch.publicId}`);
+  await expect(tomorrowCard).toContainText("Mañana de");
+
+  const futureCard = page.getByTestId(`open-match-card-${futureMatch.publicId}`);
+  await expect(futureCard).toContainText(/\d{2}\/\d{2}\/\d{4} de/);
 });
 
 test("whatsapp summary E2E: open/full states show names, urgency and CTA rules", async ({ page, request }) => {

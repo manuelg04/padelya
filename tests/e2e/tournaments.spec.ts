@@ -1,5 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
+const E2E_BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3000";
+
 async function createApiUser(request: APIRequestContext, phone: string, alias: string): Promise<string> {
   const otpRequest = await request.post("/api/auth/request-otp", { data: { phone } });
   expect(otpRequest.ok()).toBeTruthy();
@@ -216,7 +218,7 @@ test("operación de grupos: admin genera grupos/fixture y jugador ve mis partido
 
   const publicContext = await browser.newContext();
   const publicPage = await publicContext.newPage();
-  await publicPage.goto(`http://127.0.0.1:3000/torneos/${tournamentSlug}/categorias/${categorySlug}`);
+  await publicPage.goto(`${E2E_BASE_URL}/torneos/${tournamentSlug}/categorias/${categorySlug}`);
   await expect(publicPage.getByRole("heading", { name: "Grupos y partidos" })).toBeVisible();
   await expect(publicPage.getByText("Grupo A").first()).toBeVisible();
   await expect(publicPage.getByText("vs")).toHaveCount(12);
@@ -224,7 +226,7 @@ test("operación de grupos: admin genera grupos/fixture y jugador ve mis partido
   const playerContext = await browser.newContext();
   const playerPage = await playerContext.newPage();
   await playerPage.goto(
-    `http://127.0.0.1:3000/login?redirect=${encodeURIComponent(`/torneos/${tournamentSlug}/categorias/${categorySlug}`)}`,
+    `${E2E_BASE_URL}/login?redirect=${encodeURIComponent(`/torneos/${tournamentSlug}/categorias/${categorySlug}`)}`,
   );
   await completeAuth(playerPage, firstPlayerPhone, "Jugador 1");
   await expect(playerPage).toHaveURL(new RegExp(`/torneos/${tournamentSlug}/categorias/${categorySlug}`));
@@ -374,7 +376,7 @@ test("iteración 3: admin reporta resultado y público ve tabla + clasificados e
 
   const publicContext = await browser.newContext();
   const publicPage = await publicContext.newPage();
-  await publicPage.goto(`http://127.0.0.1:3000/torneos/${tournamentSlug}/categorias/${categorySlug}`);
+  await publicPage.goto(`${E2E_BASE_URL}/torneos/${tournamentSlug}/categorias/${categorySlug}`);
 
   await expect(publicPage.getByRole("heading", { name: "Tabla de posiciones" })).toBeVisible();
   await expect(publicPage.getByRole("heading", { name: "Clasificados" })).toBeVisible();

@@ -417,6 +417,36 @@ describe("PadelService integration", () => {
     expect(view.canLeave).toBe(false);
   });
 
+  it("keeps enrolled players visible when match transitions to no_se_armo", async () => {
+    const organizer = await createAuthedUser(service, "+573001113305", "Org NoShow Enrolled");
+    const p2 = await createAuthedUser(service, "+573001113306", "NoShow Enrolled 2");
+    const p3 = await createAuthedUser(service, "+573001113307", "NoShow Enrolled 3");
+
+    const match = service.createMatch(organizer, {
+      club: "Padel No Show Enrolled",
+      startsAtLocal: "2030-02-20T20:00",
+      category: "4ta",
+      modality: "mixto",
+    });
+
+    await service.join(match.publicId, p2);
+    await service.join(match.publicId, p3);
+    forceMatchStartsAtUtc(service, match.publicId, "2000-01-01T00:00:00.000Z");
+
+    const organizerView = service.getMatch(match.publicId, organizer);
+    const playerView = service.getMatch(match.publicId, p2);
+
+    expect(organizerView.status).toBe("no_se_armo");
+    expect(playerView.status).toBe("no_se_armo");
+    expect(organizerView.participants.map((participant) => participant.alias)).toEqual([
+      "Org NoShow Enrolled",
+      "NoShow Enrolled 2",
+      "NoShow Enrolled 3",
+    ]);
+    expect(playerView.participants).toHaveLength(3);
+    expect(playerView.canLeave).toBe(false);
+  });
+
   it("blocks join, leave and watch actions when derived status is no_se_armo", async () => {
     const organizer = await createAuthedUser(service, "+573001113301", "Org NoShow Ops");
     const player = await createAuthedUser(service, "+573001113302", "NoShow Player");
@@ -466,5 +496,71 @@ describe("PadelService integration", () => {
     const secondCancel = await service.cancel(match.publicId, organizer);
     expect(secondCancel.status).toBe("cancelada");
     expect(secondCancel.isCanceled).toBe(true);
+  });
+
+  it("notifies enrolled players when organizer cancels a no_se_armo match", async () => {
+    const organizer = await createAuthedUser(service, "+573001113308", "Org NoShow Notify");
+    const player = await createAuthedUser(service, "+573001113309", "NoShow Notified");
+
+    const match = service.createMatch(organizer, {
+      club: "Padel No Show Notify",
+      startsAtLocal: "2030-02-20T21:00",
+      category: "4ta",
+      modality: "mixto",
+    });
+    await service.join(match.publicId, player);
+    forceMatchStartsAtUtc(service, match.publicId, "2000-01-01T00:00:00.000Z");
+
+    const canceled = await service.cancel(match.publicId, organizer);
+    expect(canceled.status).toBe("cancelada");
+    expect(canceled.participants.map((participant) => participant.alias)).toEqual([
+      "Org NoShow Notify",
+      "NoShow Notified",
+    ]);
+
+    const participantNotifications = service
+      .listNotifications(player, 20)
+      .filter((notification) => notification.type === "PARTIDO_CANCELADO");
+    expect(participantNotifications).toHaveLength(1);
+
+    const playerView = service.getMatch(match.publicId, player);
+    expect(playerView.status).toBe("cancelada");
+    expect(playerView.canJoin).toBe(false);
+  });
+
+  it("does not auto-assign released slot to watcher; watcher must join manually", async () => {
+    const organizer = await createAuthedUser(service, "+573001113310", "Org Waitlist");
+    const p2 = await createAuthedUser(service, "+573001113311", "Waitlist P2");
+    const p3 = await createAuthedUser(service, "+573001113312", "Waitlist P3");
+    const p4 = await createAuthedUser(service, "+573001113313", "Waitlist P4");
+    const watcher = await createAuthedUser(service, "+573001113314", "Waitlist Watcher");
+
+    const match = service.createMatch(organizer, {
+      club: "Padel Waitlist Manual",
+      startsAtLocal: "2030-02-20T22:00",
+      category: "4ta",
+      modality: "mixto",
+    });
+    await fillMatch(service, match.publicId, [p2, p3, p4]);
+    await service.followMatchWatch(match.publicId, watcher);
+
+    const reopened = await service.leave(match.publicId, p4);
+    expect(reopened.status).toBe("abierta");
+    expect(reopened.participants).toHaveLength(3);
+    expect(reopened.participants.some((participant) => participant.alias === "Waitlist Watcher")).toBe(false);
+
+    const watcherView = service.getMatch(match.publicId, watcher);
+    expect(watcherView.canJoin).toBe(true);
+    expect(watcherView.isWatchingReleaseSpot).toBe(true);
+    expect(watcherView.participants.some((participant) => participant.alias === "Waitlist Watcher")).toBe(false);
+
+    const releaseNotifications = service
+      .listNotifications(watcher, 20)
+      .filter((notification) => notification.type === "CUPO_LIBERADO");
+    expect(releaseNotifications).toHaveLength(1);
+
+    const joined = await service.join(match.publicId, watcher);
+    expect(joined.participants.some((participant) => participant.alias === "Waitlist Watcher")).toBe(true);
+    expect(joined.participants).toHaveLength(4);
   });
 });
