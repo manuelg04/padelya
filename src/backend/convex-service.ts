@@ -122,9 +122,104 @@ export class ConvexPadelService implements BackendPadelService {
     return this.createAuthedClient(idToken);
   }
 
+  private isMissingLegacyActorError(error: unknown): boolean {
+    const raw = error instanceof Error ? error.message : String(error ?? "");
+    return raw.includes("ArgumentValidationError") && raw.includes("required field `actor`");
+  }
+
+  private buildLegacyActor(idToken: string): { firebaseUid: string; phoneE164?: string } | null {
+    try {
+      const segments = idToken.split(".");
+      if (segments.length < 2) {
+        return null;
+      }
+      const payloadRaw = Buffer.from(segments[1]!, "base64url").toString("utf8");
+      const payload = JSON.parse(payloadRaw) as {
+        sub?: unknown;
+        user_id?: unknown;
+        phone_number?: unknown;
+      };
+      const firebaseUid =
+        typeof payload.user_id === "string"
+          ? payload.user_id
+          : typeof payload.sub === "string"
+            ? payload.sub
+            : null;
+      if (!firebaseUid) {
+        return null;
+      }
+
+      const actor: { firebaseUid: string; phoneE164?: string } = { firebaseUid };
+      if (typeof payload.phone_number === "string" && payload.phone_number.trim().length > 0) {
+        actor.phoneE164 = payload.phone_number;
+      }
+      return actor;
+    } catch {
+      return null;
+    }
+  }
+
+  private withLegacyActorArgs(
+    idToken: string,
+    args: object,
+  ): (Record<string, unknown> & { actor: { firebaseUid: string; phoneE164?: string } }) | null {
+    const baseArgs = args as Record<string, unknown>;
+    if ("actor" in baseArgs) {
+      return null;
+    }
+    const actor = this.buildLegacyActor(idToken);
+    if (!actor) {
+      return null;
+    }
+    return {
+      ...baseArgs,
+      actor,
+    };
+  }
+
+  private async authedMutation<TResult>(
+    idToken: string,
+    mutationRef: unknown,
+    args: object,
+  ): Promise<TResult> {
+    const client = this.createAuthedClient(idToken);
+    try {
+      return (await client.mutation(mutationRef as never, args as never)) as TResult;
+    } catch (error) {
+      if (!this.isMissingLegacyActorError(error)) {
+        throw error;
+      }
+      const fallbackArgs = this.withLegacyActorArgs(idToken, args);
+      if (!fallbackArgs) {
+        throw error;
+      }
+      return (await client.mutation(mutationRef as never, fallbackArgs as never)) as TResult;
+    }
+  }
+
+  private async authedQuery<TResult>(
+    idToken: string,
+    queryRef: unknown,
+    args: object,
+  ): Promise<TResult> {
+    const client = this.createAuthedClient(idToken);
+    try {
+      return (await client.query(queryRef as never, args as never)) as TResult;
+    } catch (error) {
+      if (!this.isMissingLegacyActorError(error)) {
+        throw error;
+      }
+      const fallbackArgs = this.withLegacyActorArgs(idToken, args);
+      if (!fallbackArgs) {
+        throw error;
+      }
+      return (await client.query(queryRef as never, fallbackArgs as never)) as TResult;
+    }
+  }
+
   async getUserByToken(token: string): Promise<UserRecord> {
     try {
-      return await this.createAuthedClient(token).mutation(api.padel.upsertUser, {});
+      return await this.authedMutation<UserRecord>(token, api.padel.upsertUser, {});
     } catch (error) {
       return normalizeError(error);
     }
@@ -132,7 +227,7 @@ export class ConvexPadelService implements BackendPadelService {
 
   async updateAlias(token: string, alias: string): Promise<UserRecord> {
     try {
-      return await this.createAuthedClient(token).mutation(api.padel.updateAlias, { alias });
+      return await this.authedMutation<UserRecord>(token, api.padel.updateAlias, { alias });
     } catch (error) {
       return normalizeError(error);
     }
@@ -140,7 +235,7 @@ export class ConvexPadelService implements BackendPadelService {
 
   async generateAvatarUploadUrl(idToken: string): Promise<string> {
     try {
-      return await this.createAuthedClient(idToken).mutation(api.padel.generateAvatarUploadUrl, {});
+      return await this.authedMutation<string>(idToken, api.padel.generateAvatarUploadUrl, {});
     } catch (error) {
       return normalizeError(error);
     }
@@ -148,7 +243,7 @@ export class ConvexPadelService implements BackendPadelService {
 
   async setAvatar(idToken: string, storageId: string): Promise<UserRecord> {
     try {
-      return await this.createAuthedClient(idToken).mutation(api.padel.setMyAvatar, {
+      return await this.authedMutation<UserRecord>(idToken, api.padel.setMyAvatar, {
         storageId: storageId as Id<"_storage">,
       });
     } catch (error) {
@@ -158,7 +253,7 @@ export class ConvexPadelService implements BackendPadelService {
 
   async removeAvatar(idToken: string): Promise<UserRecord> {
     try {
-      return await this.createAuthedClient(idToken).mutation(api.padel.removeMyAvatar, {});
+      return await this.authedMutation<UserRecord>(idToken, api.padel.removeMyAvatar, {});
     } catch (error) {
       return normalizeError(error);
     }
@@ -166,7 +261,7 @@ export class ConvexPadelService implements BackendPadelService {
 
   async createMatch(token: string, input: CreateMatchInput): Promise<MatchView> {
     try {
-      const match = await this.createAuthedClient(token).mutation(api.padel.createMatch, {
+      const match = await this.authedMutation<MatchView>(token, api.padel.createMatch, {
         input,
         timezone: "America/Bogota",
       });
@@ -187,7 +282,7 @@ export class ConvexPadelService implements BackendPadelService {
 
   async listMine(token: string): Promise<MatchView[]> {
     try {
-      return await this.createAuthedClient(token).query(api.padel.listMine, {});
+      return await this.authedQuery<MatchView[]>(token, api.padel.listMine, {});
     } catch (error) {
       return normalizeError(error);
     }
@@ -219,7 +314,7 @@ export class ConvexPadelService implements BackendPadelService {
 
   async followMatchWatch(publicId: string, token: string): Promise<MatchView> {
     try {
-      const match = await this.createAuthedClient(token).mutation(api.padel.followMatchWatch, { publicId });
+      const match = await this.authedMutation<MatchView>(token, api.padel.followMatchWatch, { publicId });
       this.events.emit(`match:${publicId}`);
       return match;
     } catch (error) {
@@ -229,7 +324,7 @@ export class ConvexPadelService implements BackendPadelService {
 
   async unfollowMatchWatch(publicId: string, token: string): Promise<MatchView> {
     try {
-      const match = await this.createAuthedClient(token).mutation(api.padel.unfollowMatchWatch, { publicId });
+      const match = await this.authedMutation<MatchView>(token, api.padel.unfollowMatchWatch, { publicId });
       this.events.emit(`match:${publicId}`);
       return match;
     } catch (error) {
@@ -239,7 +334,7 @@ export class ConvexPadelService implements BackendPadelService {
 
   async join(publicId: string, token: string): Promise<MatchView> {
     try {
-      const match = await this.createAuthedClient(token).mutation(api.padel.join, { publicId });
+      const match = await this.authedMutation<MatchView>(token, api.padel.join, { publicId });
       this.events.emit(`match:${publicId}`);
       return match;
     } catch (error) {
@@ -249,7 +344,7 @@ export class ConvexPadelService implements BackendPadelService {
 
   async leave(publicId: string, token: string): Promise<MatchView> {
     try {
-      const match = await this.createAuthedClient(token).mutation(api.padel.leave, { publicId });
+      const match = await this.authedMutation<MatchView>(token, api.padel.leave, { publicId });
       this.events.emit(`match:${publicId}`);
       return match;
     } catch (error) {
@@ -259,7 +354,7 @@ export class ConvexPadelService implements BackendPadelService {
 
   async cancel(publicId: string, token: string): Promise<MatchView> {
     try {
-      const match = await this.createAuthedClient(token).mutation(api.padel.cancel, { publicId });
+      const match = await this.authedMutation<MatchView>(token, api.padel.cancel, { publicId });
       this.events.emit(`match:${publicId}`);
       return match;
     } catch (error) {
@@ -275,7 +370,7 @@ export class ConvexPadelService implements BackendPadelService {
 
   async listNotifications(token: string, limit = 50): Promise<NotificationRecord[]> {
     try {
-      return await this.createAuthedClient(token).query(api.padel.listNotificationsForMe, { limit });
+      return await this.authedQuery<NotificationRecord[]>(token, api.padel.listNotificationsForMe, { limit });
     } catch (error) {
       return normalizeError(error);
     }
@@ -283,7 +378,7 @@ export class ConvexPadelService implements BackendPadelService {
 
   async getPushSubscriptionState(token: string): Promise<PushSubscriptionState> {
     try {
-      return await this.createAuthedClient(token).query(api.padel.getPushSubscriptionState, {});
+      return await this.authedQuery<PushSubscriptionState>(token, api.padel.getPushSubscriptionState, {});
     } catch (error) {
       return normalizeError(error);
     }
@@ -291,7 +386,7 @@ export class ConvexPadelService implements BackendPadelService {
 
   async upsertPushSubscription(token: string, subscription: PushSubscriptionPayload): Promise<PushSubscriptionState> {
     try {
-      return await this.createAuthedClient(token).mutation(api.padel.upsertPushSubscription, {
+      return await this.authedMutation<PushSubscriptionState>(token, api.padel.upsertPushSubscription, {
         subscription,
       });
     } catch (error) {
@@ -304,7 +399,7 @@ export class ConvexPadelService implements BackendPadelService {
     options?: { endpoint?: string; all?: boolean },
   ): Promise<PushSubscriptionState> {
     try {
-      return await this.createAuthedClient(token).mutation(api.padel.removePushSubscription, {
+      return await this.authedMutation<PushSubscriptionState>(token, api.padel.removePushSubscription, {
         endpoint: options?.endpoint,
         all: options?.all,
       });
@@ -338,7 +433,7 @@ export class ConvexPadelService implements BackendPadelService {
 
   async listAdminClubs(token: string): Promise<AdminClubMembership[]> {
     try {
-      return await this.createAuthedClient(token).query(api.tournaments.listAdminClubs, {});
+      return await this.authedQuery<AdminClubMembership[]>(token, api.tournaments.listAdminClubs, {});
     } catch (error) {
       return normalizeError(error);
     }
@@ -346,7 +441,7 @@ export class ConvexPadelService implements BackendPadelService {
 
   async listAdminTournaments(token: string, clubSlug: string): Promise<AdminTournamentsResponse> {
     try {
-      return await this.createAuthedClient(token).query(api.tournaments.listAdminTournaments, { clubSlug });
+      return await this.authedQuery<AdminTournamentsResponse>(token, api.tournaments.listAdminTournaments, { clubSlug });
     } catch (error) {
       return normalizeError(error);
     }
@@ -358,7 +453,7 @@ export class ConvexPadelService implements BackendPadelService {
     categorySlug: string,
   ): Promise<AdminCategoryDashboard> {
     try {
-      return await this.createAuthedClient(token).query(api.tournaments.getAdminCategoryDashboard, {
+      return await this.authedQuery<AdminCategoryDashboard>(token, api.tournaments.getAdminCategoryDashboard, {
         tournamentSlug,
         categorySlug,
       });
@@ -372,7 +467,11 @@ export class ConvexPadelService implements BackendPadelService {
     input: CreateTournamentInput,
   ): Promise<{ tournamentSlug: string; categorySlugs: string[] }> {
     try {
-      return await this.createAuthedClient(token).mutation(api.tournaments.createTournament, input);
+      return await this.authedMutation<{ tournamentSlug: string; categorySlugs: string[] }>(
+        token,
+        api.tournaments.createTournament,
+        input,
+      );
     } catch (error) {
       return normalizeError(error);
     }
@@ -385,11 +484,15 @@ export class ConvexPadelService implements BackendPadelService {
     input?: { groupCount?: number },
   ): Promise<{ groupCount: number; teamsCount: number }> {
     try {
-      return await this.createAuthedClient(token).mutation(api.tournaments.generateCategoryGroups, {
+      return await this.authedMutation<{ groupCount: number; teamsCount: number }>(
+        token,
+        api.tournaments.generateCategoryGroups,
+        {
         tournamentSlug,
         categorySlug,
         groupCount: input?.groupCount,
-      });
+        },
+      );
     } catch (error) {
       return normalizeError(error);
     }
@@ -403,7 +506,7 @@ export class ConvexPadelService implements BackendPadelService {
     targetGroupName: string,
   ): Promise<{ ok: true }> {
     try {
-      await this.createAuthedClient(token).mutation(api.tournaments.moveCategoryTeamToGroup, {
+      await this.authedMutation<void>(token, api.tournaments.moveCategoryTeamToGroup, {
         tournamentSlug,
         categorySlug,
         teamId: teamId as Id<"tournamentTeams">,
@@ -421,10 +524,14 @@ export class ConvexPadelService implements BackendPadelService {
     categorySlug: string,
   ): Promise<{ groupsCount: number; matchesCount: number }> {
     try {
-      return await this.createAuthedClient(token).mutation(api.tournaments.generateCategoryGroupMatches, {
+      return await this.authedMutation<{ groupsCount: number; matchesCount: number }>(
+        token,
+        api.tournaments.generateCategoryGroupMatches,
+        {
         tournamentSlug,
         categorySlug,
-      });
+        },
+      );
     } catch (error) {
       return normalizeError(error);
     }
@@ -438,13 +545,17 @@ export class ConvexPadelService implements BackendPadelService {
     payload: { winnerTeamId: string; sets: TournamentSetScore[] },
   ): Promise<{ matchId: string; status: "completed" }> {
     try {
-      return await this.createAuthedClient(token).mutation(api.tournaments.reportCategoryGroupMatchResult, {
+      return await this.authedMutation<{ matchId: string; status: "completed" }>(
+        token,
+        api.tournaments.reportCategoryGroupMatchResult,
+        {
         tournamentSlug,
         categorySlug,
         matchId: matchId as Id<"tournamentMatches">,
         winnerTeamId: payload.winnerTeamId as Id<"tournamentTeams">,
         sets: payload.sets,
-      });
+        },
+      );
     } catch (error) {
       return normalizeError(error);
     }
@@ -457,12 +568,16 @@ export class ConvexPadelService implements BackendPadelService {
     payload: TournamentRegistrationRequest,
   ): Promise<{ registrationId: string; status: TournamentRegistrationStatus }> {
     try {
-      const result = await this.createAuthedClient(token).mutation(api.tournaments.registerForCategory, {
-        tournamentSlug,
-        categorySlug,
-        teamName: payload.teamName,
-        partnerPhone: payload.partnerPhone,
-      });
+      const result = await this.authedMutation<{ registrationId: string; status: string }>(
+        token,
+        api.tournaments.registerForCategory,
+        {
+          tournamentSlug,
+          categorySlug,
+          teamName: payload.teamName,
+          partnerPhone: payload.partnerPhone,
+        },
+      );
       return {
         registrationId: result.registrationId,
         status: result.status as TournamentRegistrationStatus,
@@ -477,9 +592,13 @@ export class ConvexPadelService implements BackendPadelService {
     registrationId: string,
   ): Promise<{ registrationId: string; status: "cancelled" }> {
     try {
-      return await this.createAuthedClient(token).mutation(api.tournaments.cancelMyRegistration, {
+      return await this.authedMutation<{ registrationId: string; status: "cancelled" }>(
+        token,
+        api.tournaments.cancelMyRegistration,
+        {
         registrationId: registrationId as Id<"tournamentRegistrations">,
-      });
+        },
+      );
     } catch (error) {
       return normalizeError(error);
     }
@@ -491,10 +610,14 @@ export class ConvexPadelService implements BackendPadelService {
     status: TournamentRegistrationStatus,
   ): Promise<{ registrationId: string; status: TournamentRegistrationStatus }> {
     try {
-      const result = await this.createAuthedClient(token).mutation(api.tournaments.setRegistrationStatus, {
-        registrationId: registrationId as Id<"tournamentRegistrations">,
-        status,
-      });
+      const result = await this.authedMutation<{ registrationId: string; status: string }>(
+        token,
+        api.tournaments.setRegistrationStatus,
+        {
+          registrationId: registrationId as Id<"tournamentRegistrations">,
+          status,
+        },
+      );
       return {
         registrationId: result.registrationId,
         status: result.status as TournamentRegistrationStatus,
@@ -510,7 +633,7 @@ export class ConvexPadelService implements BackendPadelService {
     paymentInstructions: string,
   ): Promise<{ ok: true }> {
     try {
-      await this.createAuthedClient(token).mutation(api.tournaments.updateClubPaymentInstructions, {
+      await this.authedMutation<void>(token, api.tournaments.updateClubPaymentInstructions, {
         clubSlug,
         paymentInstructions,
       });
