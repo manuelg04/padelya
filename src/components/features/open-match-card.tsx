@@ -28,6 +28,7 @@ export const OpenMatchCard = memo(function OpenMatchCard({
 }: OpenMatchCardProps) {
   const schedule = formatFeedSchedule(match.startsAtUtc);
   const participantCount = match.participants.length;
+  const categoryAndModality = `${match.category} · ${MODALITY_LABEL[match.modality]}`;
 
   return (
     <Card
@@ -43,7 +44,7 @@ export const OpenMatchCard = memo(function OpenMatchCard({
                 Nuevo
               </Badge>
             ) : null}
-            <Badge variant="neutral">{MODALITY_LABEL[match.modality]}</Badge>
+            <Badge variant="neutral">{categoryAndModality}</Badge>
           </div>
         </div>
       </CardHeader>

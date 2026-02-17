@@ -354,9 +354,11 @@ test("reservas futuras: feed muestra Mañana y fecha absoluta para días posteri
 
   const tomorrowCard = page.getByTestId(`open-match-card-${tomorrowMatch.publicId}`);
   await expect(tomorrowCard).toContainText("Mañana de");
+  await expect(tomorrowCard).toContainText("4ta · Mixto");
 
   const futureCard = page.getByTestId(`open-match-card-${futureMatch.publicId}`);
   await expect(futureCard).toContainText(/\d{2}\/\d{2}\/\d{4} de/);
+  await expect(futureCard).toContainText("4ta · Fem");
 });
 
 test("whatsapp summary E2E: open/full states show names, urgency and CTA rules", async ({ page, request }) => {

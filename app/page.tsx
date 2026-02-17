@@ -395,10 +395,10 @@ export default function HomePage() {
             </div>
             <div className="min-w-0">
               <h1 className="text-lg font-bold leading-tight tracking-tight text-emerald-900 sm:text-xl">
-                Cupos en tiempo real, sin estar pendiente
+                Organiza tu partido en segundos.
               </h1>
               <p className="mt-1 text-sm leading-relaxed text-emerald-700/80">
-                Comparte el enlace y listo: todos ven cupos y confirmados actualizados al instante.
+                Crea un enlace único, compártelo y gestiona los cupos en tiempo real. Adiós a las listas en el chat.
               </p>
               <p className="mt-1 text-xs font-medium tracking-wide text-emerald-700/70">PadelYA · BGA</p>
             </div>
@@ -407,7 +407,7 @@ export default function HomePage() {
             <Button asChild size="lg" className="w-full sm:w-auto">
               <Link href={user ? "/crear" : "/login?redirect=/crear"}>
                 <Plus className="h-4 w-4" />
-                Crear partido
+                Armar partido
               </Link>
             </Button>
             {!user ? (
