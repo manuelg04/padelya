@@ -5,6 +5,7 @@ type ReadCtx = QueryCtx | MutationCtx;
 
 export type RegistrationStatus = "pending" | "confirmed" | "waitlist" | "cancelled";
 export type TournamentMatchPhase = "group";
+export type TournamentFreeRoundSourceType = "manual" | "random";
 
 export async function getClubBySlug(ctx: ReadCtx, slug: string): Promise<Doc<"clubs"> | null> {
   return ctx.db
@@ -184,6 +185,44 @@ export async function listTournamentMatchesByGroup(
   const rows = await ctx.db
     .query("tournamentMatches")
     .withIndex("by_group", (q) => q.eq("groupId", groupId))
+    .collect();
+  return rows.sort((a, b) => a.order - b.order);
+}
+
+export async function listTournamentFreeRoundsByCategory(
+  ctx: ReadCtx,
+  categoryId: Id<"tournamentCategories">,
+): Promise<Doc<"tournamentFreeRounds">[]> {
+  const rows = await ctx.db
+    .query("tournamentFreeRounds")
+    .withIndex("by_category", (q) => q.eq("categoryId", categoryId))
+    .collect();
+  return rows.sort((a, b) => a.order - b.order);
+}
+
+export async function listTournamentFreeMatchesByCategory(
+  ctx: ReadCtx,
+  categoryId: Id<"tournamentCategories">,
+): Promise<Doc<"tournamentFreeMatches">[]> {
+  const rows = await ctx.db
+    .query("tournamentFreeMatches")
+    .withIndex("by_category", (q) => q.eq("categoryId", categoryId))
+    .collect();
+  return rows.sort((a, b) => {
+    if (a.roundId !== b.roundId) {
+      return String(a.roundId).localeCompare(String(b.roundId));
+    }
+    return a.order - b.order;
+  });
+}
+
+export async function listTournamentFreeMatchesByRound(
+  ctx: ReadCtx,
+  roundId: Id<"tournamentFreeRounds">,
+): Promise<Doc<"tournamentFreeMatches">[]> {
+  const rows = await ctx.db
+    .query("tournamentFreeMatches")
+    .withIndex("by_round", (q) => q.eq("roundId", roundId))
     .collect();
   return rows.sort((a, b) => a.order - b.order);
 }

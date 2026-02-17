@@ -57,14 +57,14 @@ function TournamentContent({ data }: { data: PublicTournamentDetail }) {
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">{category.name}</CardTitle>
                 <CardDescription>
-                  Confirmados {category.counts.confirmed}/{category.capacity} · Pendientes {category.counts.pending}
+                  Cupos disponibles {category.slotsRemaining} · Con pago confirmado {category.counts.confirmed}/{category.capacity} · Sin pago confirmado {category.counts.pending}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
                 {category.note ? <p className="text-sm text-zinc-600">{category.note}</p> : null}
                 <Button className="w-full" asChild>
                   <Link href={`/torneos/${data.tournament.slug}/categorias/${category.slug}`}>
-                    Inscribirme en esta categoría
+                    {category.competitionMode === "free" ? "Modo libre" : "Fase de grupos"} · Inscribirme
                   </Link>
                 </Button>
               </CardContent>

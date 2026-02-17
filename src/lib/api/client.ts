@@ -12,6 +12,8 @@ import type {
   PublicTournamentDetail,
   PushSubscriptionPayload,
   PushSubscriptionState,
+  TournamentFreeMatchResultInput,
+  TournamentFreeRoundCreateRequest,
   TournamentRegistrationRequest,
   TournamentRegistrationStatus,
   TournamentSetScore,
@@ -394,6 +396,47 @@ export async function reportAdminTournamentGroupMatchResult(
 ): Promise<{ matchId: string; status: "completed" }> {
   const response = await fetch(
     `/api/admin/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}/group-matches/${encodeURIComponent(matchId)}/result`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(token),
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+  return parseJson(response);
+}
+
+export async function createAdminTournamentFreeRound(
+  token: string,
+  tournamentSlug: string,
+  categorySlug: string,
+  payload: TournamentFreeRoundCreateRequest,
+): Promise<{ roundId: string; matchesCount: number; byeCount: number }> {
+  const response = await fetch(
+    `/api/admin/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}/free-rounds`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(token),
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+  return parseJson(response);
+}
+
+export async function reportAdminTournamentFreeMatchResult(
+  token: string,
+  tournamentSlug: string,
+  categorySlug: string,
+  matchId: string,
+  payload: TournamentFreeMatchResultInput,
+): Promise<{ matchId: string; status: "completed" }> {
+  const response = await fetch(
+    `/api/admin/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}/free-matches/${encodeURIComponent(matchId)}/result`,
     {
       method: "PATCH",
       headers: {

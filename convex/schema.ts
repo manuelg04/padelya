@@ -138,6 +138,7 @@ export default defineSchema({
     tournamentId: v.id("tournaments"),
     slug: v.string(),
     name: v.string(),
+    competitionMode: v.optional(v.union(v.literal("groups"), v.literal("free"))),
     capacity: v.number(),
     note: v.optional(v.string()),
     createdAt: v.string(),
@@ -217,4 +218,41 @@ export default defineSchema({
     .index("by_category_phase", ["categoryId", "phase"])
     .index("by_group", ["groupId"])
     .index("by_tournament_category_phase", ["tournamentId", "categoryId", "phase"]),
+
+  tournamentFreeRounds: defineTable({
+    tournamentId: v.id("tournaments"),
+    categoryId: v.id("tournamentCategories"),
+    name: v.string(),
+    order: v.number(),
+    sourceType: v.union(v.literal("manual"), v.literal("random")),
+    sourceRoundId: v.optional(v.id("tournamentFreeRounds")),
+    createdByUserId: v.id("users"),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+  })
+    .index("by_category", ["categoryId"])
+    .index("by_category_order", ["categoryId", "order"])
+    .index("by_tournament_category", ["tournamentId", "categoryId"]),
+
+  tournamentFreeMatches: defineTable({
+    tournamentId: v.id("tournaments"),
+    categoryId: v.id("tournamentCategories"),
+    roundId: v.id("tournamentFreeRounds"),
+    order: v.number(),
+    teamAId: v.id("tournamentTeams"),
+    teamBId: v.optional(v.id("tournamentTeams")),
+    status: v.union(v.literal("pending"), v.literal("completed")),
+    winnerTeamId: v.optional(v.id("tournamentTeams")),
+    scoreText: v.optional(v.string()),
+    resultMeta: v.optional(v.any()),
+    reportedAt: v.optional(v.string()),
+    reportedByUserId: v.optional(v.id("users")),
+    createdByUserId: v.id("users"),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+  })
+    .index("by_round", ["roundId"])
+    .index("by_category", ["categoryId"])
+    .index("by_category_round", ["categoryId", "roundId"])
+    .index("by_tournament_category", ["tournamentId", "categoryId"]),
 });

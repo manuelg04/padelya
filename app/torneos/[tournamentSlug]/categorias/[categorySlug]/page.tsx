@@ -39,12 +39,21 @@ function LoadingView() {
 }
 
 type GroupMatchView = NonNullable<PublicTournamentCategoryDetail["groupStage"]>["matchesByGroup"][number]["matches"][number];
+type FreeRoundView = NonNullable<PublicTournamentCategoryDetail["freeStage"]>["rounds"][number];
+type FreeMatchView = FreeRoundView["matches"][number];
 
 function formatMatchScore(match: GroupMatchView): string {
   if (!match.result) {
     return "Pendiente";
   }
   return match.result.sets.map((set) => `${set.teamAGames}-${set.teamBGames}`).join(" / ");
+}
+
+function formatFreeMatchScore(match: FreeMatchView): string {
+  if (!match.result) {
+    return "Pendiente";
+  }
+  return match.result.scoreText;
 }
 
 function CategoryContent({
@@ -74,7 +83,7 @@ function CategoryContent({
   feedback: string | null;
   error: string | null;
 }) {
-  const categoryClosed = Boolean(data.groupStage);
+  const categoryClosed = Boolean(data.groupStage || data.freeStage);
   const canRegister = !data.myRegistration && !categoryClosed && isAuthenticated && hasAlias;
   const canStartRegistration = !data.myRegistration && !categoryClosed && !isAuthenticated;
   const mustCompleteProfile = !data.myRegistration && !categoryClosed && isAuthenticated && !hasAlias;
@@ -89,13 +98,17 @@ function CategoryContent({
           </CardHeader>
           <CardContent className="space-y-2 text-sm text-zinc-700">
             <p>Club: {data.club.name}</p>
+            <p>Cupos disponibles: {data.category.slotsRemaining}</p>
             <p>
-              Cupos confirmados: {data.category.counts.confirmed}/{data.category.capacity}
+              Con pago confirmado: {data.category.counts.confirmed}/{data.category.capacity}
             </p>
-            <p>Pendientes: {data.category.counts.pending} · Lista espera: {data.category.counts.waitlist}</p>
+            <p>Sin pago confirmado: {data.category.counts.pending} · Lista espera: {data.category.counts.waitlist}</p>
             {data.category.note ? <p>{data.category.note}</p> : null}
             {categoryClosed ? (
-              <p className="text-amber-700">La categoría ya cerró inscripciones y está en fase de grupos.</p>
+              <p className="text-amber-700">
+                La categoría ya cerró inscripciones y está en competencia (
+                {data.category.competitionMode === "free" ? "modo libre" : "fase de grupos"}).
+              </p>
             ) : null}
           </CardContent>
         </Card>
@@ -131,7 +144,26 @@ function CategoryContent({
           </Card>
         ) : null}
 
-        {data.groupStage ? (
+        {data.myFreeMatches.length > 0 ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Mis cruces libres</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              {data.myFreeMatches.map((match) => (
+                <div key={match.id} className="rounded-md border border-zinc-200 p-2">
+                  <p className="font-medium">{match.roundName}</p>
+                  <p>
+                    {match.teamA.teamName} vs {match.teamB?.teamName ?? "BYE"}
+                  </p>
+                  <p className="text-xs text-zinc-600">Resultado: {formatFreeMatchScore(match)}</p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {data.category.competitionMode === "groups" && data.groupStage ? (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Grupos y partidos</CardTitle>
@@ -175,7 +207,36 @@ function CategoryContent({
           </Card>
         ) : null}
 
-        {data.groupStage ? (
+        {data.category.competitionMode === "free" && data.freeStage ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Rondas libres</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {data.freeStage.rounds.map((round) => (
+                <div key={round.id} className="space-y-2 rounded-lg border border-zinc-200 p-3">
+                  <p className="text-sm font-semibold">
+                    {round.name} · {round.sourceType === "random" ? "Aleatoria" : "Manual"}
+                  </p>
+                  {round.matches.length === 0 ? (
+                    <p className="text-sm text-zinc-500">Sin cruces.</p>
+                  ) : (
+                    round.matches.map((match) => (
+                      <div key={match.id} className="text-sm">
+                        <p>
+                          {match.teamA.teamName} vs {match.teamB?.teamName ?? "BYE"}
+                        </p>
+                        <p className="text-xs text-zinc-600">Resultado: {formatFreeMatchScore(match)}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {data.category.competitionMode === "groups" && data.groupStage ? (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Tabla de posiciones</CardTitle>
@@ -201,7 +262,7 @@ function CategoryContent({
           </Card>
         ) : null}
 
-        {data.groupStage ? (
+        {data.category.competitionMode === "groups" && data.groupStage ? (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Clasificados</CardTitle>
@@ -330,7 +391,7 @@ function useCategoryActions(
       return;
     }
 
-    if (data?.groupStage) {
+    if (data?.groupStage || data?.freeStage) {
       setError("La categoría ya está cerrada para inscripciones.");
       return;
     }
@@ -350,14 +411,14 @@ function useCategoryActions(
     } finally {
       setIsSubmitting(false);
     }
-  }, [categorySlug, data?.groupStage, partnerPhone, pathname, reload, router, teamName, token, tournamentSlug, user]);
+  }, [categorySlug, data?.freeStage, data?.groupStage, partnerPhone, pathname, reload, router, teamName, token, tournamentSlug, user]);
 
   const handleCancel = useCallback(async () => {
     if (!token || !data?.myRegistration) {
       return;
     }
 
-    if (data.groupStage) {
+    if (data.groupStage || data.freeStage) {
       setError("La categoría ya está cerrada para cambios de inscripción.");
       return;
     }

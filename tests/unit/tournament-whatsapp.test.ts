@@ -39,6 +39,7 @@ const categoryDetail: PublicTournamentCategoryDetail = {
       waitlist: 2,
       cancelled: 1,
     },
+    slotsRemaining: 3,
   },
   myRegistration: null,
   groupStage: null,

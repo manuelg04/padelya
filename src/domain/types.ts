@@ -115,6 +115,7 @@ export interface PushSubscriptionState {
 }
 
 export type TournamentRegistrationStatus = "pending" | "confirmed" | "waitlist" | "cancelled";
+export type TournamentCompetitionMode = "groups" | "free";
 
 export interface TournamentCategoryCounts {
   pending: number;
@@ -127,9 +128,11 @@ export interface PublicTournamentCategorySummary {
   id: string;
   slug: string;
   name: string;
+  competitionMode: TournamentCompetitionMode;
   capacity: number;
   note: string | null;
   counts: TournamentCategoryCounts;
+  slotsRemaining: number;
   confirmedLabel: string;
 }
 
@@ -239,6 +242,39 @@ export interface TournamentGroupStage {
   qualifiedTeams: TournamentQualifiedTeamView[];
 }
 
+export type TournamentFreeRoundSourceType = "manual" | "random";
+
+export interface TournamentFreeMatchView {
+  id: string;
+  order: number;
+  status: "pending" | "completed";
+  teamA: TournamentGroupTeamView;
+  teamB: TournamentGroupTeamView | null;
+  result: {
+    winnerTeamId: string;
+    scoreText: string;
+    resultMeta: Record<string, string | number | boolean | null> | null;
+  } | null;
+}
+
+export interface TournamentFreeRoundView {
+  id: string;
+  name: string;
+  order: number;
+  sourceType: TournamentFreeRoundSourceType;
+  sourceRoundId: string | null;
+  matches: TournamentFreeMatchView[];
+}
+
+export interface TournamentFreeStage {
+  generatedAt: string;
+  rounds: TournamentFreeRoundView[];
+}
+
+export interface TournamentMyFreeMatchView extends TournamentFreeMatchView {
+  roundName: string;
+}
+
 export interface PublicTournamentCategoryDetail {
   tournament: {
     id: string;
@@ -260,13 +296,17 @@ export interface PublicTournamentCategoryDetail {
     id: string;
     slug: string;
     name: string;
+    competitionMode: TournamentCompetitionMode;
     capacity: number;
     note: string | null;
     counts: TournamentCategoryCounts;
+    slotsRemaining: number;
   };
   myRegistration: TournamentMyRegistration | null;
   groupStage: TournamentGroupStage | null;
   myGroupMatches: TournamentMyGroupMatchView[];
+  freeStage: TournamentFreeStage | null;
+  myFreeMatches: TournamentMyFreeMatchView[];
 }
 
 export interface AdminClubMembership {
@@ -287,6 +327,7 @@ export interface AdminTournamentSummary {
   categories: Array<{
     slug: string;
     name: string;
+    competitionMode: TournamentCompetitionMode;
     capacity: number;
   }>;
 }
@@ -301,6 +342,7 @@ export interface AdminTournamentsResponse {
 
 export interface AdminTournamentRegistrationItem {
   id: string;
+  teamId: string;
   status: TournamentRegistrationStatus;
   createdAt: string;
   updatedAt: string;
@@ -328,6 +370,7 @@ export interface AdminCategoryDashboard {
     id: string;
     slug: string;
     name: string;
+    competitionMode: TournamentCompetitionMode;
     capacity: number;
     note: string | null;
     counts: TournamentCategoryCounts;
@@ -343,7 +386,9 @@ export interface AdminCategoryDashboard {
 export interface CreateTournamentInput {
   clubSlug: string;
   name: string;
-  startsAtLocal: string;
+  startsAtLocal?: string;
+  startsAtDate?: string;
+  startsAtTime?: string;
   timezone?: string;
   description: string;
   prizes?: string;
@@ -351,6 +396,7 @@ export interface CreateTournamentInput {
   posterUrl?: string;
   categories: Array<{
     name: string;
+    competitionMode?: TournamentCompetitionMode;
     capacity: number;
     note?: string;
   }>;
@@ -359,4 +405,22 @@ export interface CreateTournamentInput {
 export interface TournamentRegistrationRequest {
   teamName: string;
   partnerPhone?: string;
+}
+
+export interface TournamentFreeRoundPairingInput {
+  teamAId: string;
+  teamBId?: string | null;
+}
+
+export interface TournamentFreeRoundCreateRequest {
+  name?: string;
+  sourceType: TournamentFreeRoundSourceType;
+  sourceRoundId?: string;
+  manualPairings?: TournamentFreeRoundPairingInput[];
+}
+
+export interface TournamentFreeMatchResultInput {
+  winnerTeamId: string;
+  scoreText: string;
+  resultMeta?: Record<string, string | number | boolean | null> | null;
 }

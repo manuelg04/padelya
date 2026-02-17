@@ -11,11 +11,13 @@ import {
   isNoShowExpired,
   isWholeHourBogotaLocalDateTime,
   isValidAlias,
+  localDateTimeToUtcIso,
   normalizeAlias,
   suggestRetryStartsAtLocal,
   utcIsoToBogotaParts,
 } from "@/src/domain/match";
 import type { MatchView } from "@/src/domain/types";
+import { buildManualFreeRoundPairings, buildRandomFreeRoundPairings } from "@/src/domain/tournament";
 import { AVATAR_MAX_BYTES, getAvatarInitials, validateAvatarFile } from "@/src/lib/avatar";
 import { normalizePublicId } from "@/src/lib/public-id";
 
@@ -98,6 +100,10 @@ describe("domain/match", () => {
     const local = utcIsoToBogotaParts(utc);
     expect(local.date).toBe("12/02/2026");
     expect(local.time).toBe("20:30");
+  });
+
+  it("converts datetime-local using an explicit timezone", () => {
+    expect(localDateTimeToUtcIso("2030-07-10T18:00", "America/New_York")).toBe("2030-07-10T22:00:00.000Z");
   });
 
   it("validates whole-hour local slots", () => {
@@ -325,5 +331,42 @@ describe("domain/match", () => {
 
     const tooBig = new File([new Uint8Array(AVATAR_MAX_BYTES + 1)], "avatar.png", { type: "image/png" });
     expect(validateAvatarFile(tooBig)).toBe("La foto debe pesar máximo 3MB.");
+  });
+
+  it("builds random free round pairings and auto-creates one BYE when odd", () => {
+    const pairings = buildRandomFreeRoundPairings(["t1", "t2", "t3", "t4", "t5"]);
+    const byes = pairings.filter((pairing) => pairing.teamBId === null);
+
+    expect(pairings).toHaveLength(3);
+    expect(byes).toHaveLength(1);
+    expect(new Set(pairings.flatMap((pairing) => [pairing.teamAId, pairing.teamBId].filter(Boolean))).size).toBe(5);
+  });
+
+  it("builds manual free pairings and appends BYE for one unpaired team", () => {
+    const pairings = buildManualFreeRoundPairings(
+      ["team-a", "team-b", "team-c"],
+      [{ teamAId: "team-a", teamBId: "team-b" }],
+    );
+
+    expect(pairings).toEqual([
+      { teamAId: "team-a", teamBId: "team-b" },
+      { teamAId: "team-c", teamBId: null },
+    ]);
+  });
+
+  it("rejects invalid manual free pairings", () => {
+    expect(() =>
+      buildManualFreeRoundPairings(
+        ["team-a", "team-b", "team-c", "team-d"],
+        [{ teamAId: "team-a", teamBId: "team-b" }],
+      ),
+    ).toThrow("VALIDATION_ERROR");
+
+    expect(() =>
+      buildManualFreeRoundPairings(
+        ["team-a", "team-b"],
+        [{ teamAId: "team-a", teamBId: "team-a" }],
+      ),
+    ).toThrow("VALIDATION_ERROR");
   });
 });

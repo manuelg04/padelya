@@ -22,6 +22,8 @@ import type {
   PublicTournamentDetail,
   PushSubscriptionPayload,
   PushSubscriptionState,
+  TournamentFreeMatchResultInput,
+  TournamentFreeRoundCreateRequest,
   TournamentRegistrationRequest,
   TournamentRegistrationStatus,
   TournamentSetScore,
@@ -554,6 +556,58 @@ export class ConvexPadelService implements BackendPadelService {
         matchId: matchId as Id<"tournamentMatches">,
         winnerTeamId: payload.winnerTeamId as Id<"tournamentTeams">,
         sets: payload.sets,
+        },
+      );
+    } catch (error) {
+      return normalizeError(error);
+    }
+  }
+
+  async createTournamentFreeRound(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+    payload: TournamentFreeRoundCreateRequest,
+  ): Promise<{ roundId: string; matchesCount: number; byeCount: number }> {
+    try {
+      return await this.authedMutation<{ roundId: string; matchesCount: number; byeCount: number }>(
+        token,
+        api.tournaments.createCategoryFreeRound,
+        {
+          tournamentSlug,
+          categorySlug,
+          name: payload.name,
+          sourceType: payload.sourceType,
+          sourceRoundId: payload.sourceRoundId ? (payload.sourceRoundId as Id<"tournamentFreeRounds">) : undefined,
+          manualPairings: payload.manualPairings?.map((pairing) => ({
+            teamAId: pairing.teamAId as Id<"tournamentTeams">,
+            teamBId: pairing.teamBId ? (pairing.teamBId as Id<"tournamentTeams">) : undefined,
+          })),
+        },
+      );
+    } catch (error) {
+      return normalizeError(error);
+    }
+  }
+
+  async reportTournamentFreeMatchResult(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+    matchId: string,
+    payload: TournamentFreeMatchResultInput,
+  ): Promise<{ matchId: string; status: "completed" }> {
+    try {
+      return await this.authedMutation<{ matchId: string; status: "completed" }>(
+        token,
+        api.tournaments.reportCategoryFreeMatchResult,
+        {
+          tournamentSlug,
+          categorySlug,
+          matchId: matchId as Id<"tournamentFreeMatches">,
+          winnerTeamId: payload.winnerTeamId as Id<"tournamentTeams">,
+          scoreText: payload.scoreText,
+          resultMeta: payload.resultMeta ?? undefined,
         },
       );
     } catch (error) {

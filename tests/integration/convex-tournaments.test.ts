@@ -41,6 +41,66 @@ describe("Convex tournaments", () => {
     expect(created.categorySlugs).toHaveLength(2);
   });
 
+  it("forces America/Bogota timezone on tournament creation", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.mutation(api.tournaments.seedClubAndMembers, {
+      clubSlug: "smash-club",
+      clubName: "Smash Club",
+      adminFirebaseUids: ["admin-uid"],
+      staffFirebaseUids: [],
+      seedToken: "test-seed-token",
+    });
+
+    const admin = t.withIdentity({ subject: "admin-uid", phoneNumber: "+573001000001" });
+    await admin.mutation(api.padel.upsertUser, {});
+
+    const created = await admin.mutation(api.tournaments.createTournament, {
+      clubSlug: "smash-club",
+      name: "Torneo Timezone",
+      startsAtLocal: "2030-07-10T18:00",
+      timezone: "America/New_York",
+      description: "Torneo con timezone",
+      categories: [{ name: "Mixto", capacity: 2 }],
+    });
+
+    const detail = await admin.query(api.tournaments.getTournamentBySlug, {
+      tournamentSlug: created.tournamentSlug,
+    });
+
+    expect(detail.tournament.timezone).toBe("America/Bogota");
+    expect(detail.tournament.startsAtUtc).toBe("2030-07-10T23:00:00.000Z");
+  });
+
+  it("allows tournament creation with date and optional empty time", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.mutation(api.tournaments.seedClubAndMembers, {
+      clubSlug: "smash-club",
+      clubName: "Smash Club",
+      adminFirebaseUids: ["admin-uid"],
+      staffFirebaseUids: [],
+      seedToken: "test-seed-token",
+    });
+
+    const admin = t.withIdentity({ subject: "admin-uid", phoneNumber: "+573001000001" });
+    await admin.mutation(api.padel.upsertUser, {});
+
+    const created = await admin.mutation(api.tournaments.createTournament, {
+      clubSlug: "smash-club",
+      name: "Torneo Solo Fecha",
+      startsAtDate: "2030-07-10",
+      description: "Torneo sin hora",
+      categories: [{ name: "Mixto", capacity: 2 }],
+    });
+
+    const detail = await admin.query(api.tournaments.getTournamentBySlug, {
+      tournamentSlug: created.tournamentSlug,
+    });
+
+    expect(detail.tournament.startsAtUtc).toBe("2030-07-10T05:00:00.000Z");
+  });
+
   it("blocks non-admin from creating tournaments", async () => {
     const t = convexTest(schema, modules);
 
@@ -365,10 +425,7 @@ describe("Convex tournaments", () => {
       categorySlug,
       matchId: firstMatch!.id as Id<"tournamentMatches">,
       winnerTeamId: firstMatch!.teamA.id as Id<"tournamentTeams">,
-      sets: [
-        { teamAGames: 6, teamBGames: 4 },
-        { teamAGames: 6, teamBGames: 3 },
-      ],
+      sets: [{ teamAGames: 8, teamBGames: 6 }],
     });
 
     const afterFirstReport = await admin.query(api.tournaments.getTournamentCategoryBySlug, {
@@ -380,6 +437,7 @@ describe("Convex tournaments", () => {
     );
     expect(firstMatchAfterReport?.status).toBe("completed");
     expect(firstMatchAfterReport?.result?.winnerTeamId).toBe(firstMatch!.teamA.id);
+    expect(firstMatchAfterReport?.result?.sets).toHaveLength(1);
 
     await admin.mutation(api.tournaments.reportCategoryGroupMatchResult, {
       tournamentSlug: created.tournamentSlug,
@@ -485,5 +543,110 @@ describe("Convex tournaments", () => {
     expect(firstStanding?.rows[1]?.qualified).toBe(true);
     expect(firstStanding?.hasUnresolvedTieAtQualificationCutoff).toBe(false);
     expect(finalDetail.groupStage?.qualifiedTeams.length).toBe(4);
+  });
+
+  it("supports free rounds with open results and next rounds from winners", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.mutation(api.tournaments.seedClubAndMembers, {
+      clubSlug: "smash-club",
+      clubName: "Smash Club",
+      adminFirebaseUids: ["admin-uid"],
+      staffFirebaseUids: [],
+      seedToken: "test-seed-token",
+    });
+
+    const admin = t.withIdentity({ subject: "admin-uid", phoneNumber: "+573001000001" });
+    await admin.mutation(api.padel.upsertUser, {});
+    await admin.mutation(api.padel.updateAlias, { alias: "Admin" });
+
+    const created = await admin.mutation(api.tournaments.createTournament, {
+      clubSlug: "smash-club",
+      name: "Torneo Libre Convex",
+      startsAtLocal: "2030-02-10T18:00",
+      description: "x",
+      categories: [{ name: "Libre", competitionMode: "free", capacity: 5 }],
+    });
+    const categorySlug = created.categorySlugs[0]!;
+
+    for (let index = 1; index <= 5; index += 1) {
+      const player = t.withIdentity({ subject: `free-p${index}`, phoneNumber: `+57300140010${index}` });
+      await player.mutation(api.padel.upsertUser, {});
+      await player.mutation(api.padel.updateAlias, { alias: `Free${index}` });
+
+      const registration = await player.mutation(api.tournaments.registerForCategory, {
+        tournamentSlug: created.tournamentSlug,
+        categorySlug,
+        teamName: `Free Team ${index}`,
+      });
+
+      await admin.mutation(api.tournaments.setRegistrationStatus, {
+        registrationId: registration.registrationId as Id<"tournamentRegistrations">,
+        status: "confirmed",
+      });
+    }
+
+    const firstRound = await admin.mutation(api.tournaments.createCategoryFreeRound, {
+      tournamentSlug: created.tournamentSlug,
+      categorySlug,
+      sourceType: "random",
+    });
+    expect(firstRound.matchesCount).toBe(3);
+    expect(firstRound.byeCount).toBe(1);
+
+    const detailAfterFirstRound = await admin.query(api.tournaments.getTournamentCategoryBySlug, {
+      tournamentSlug: created.tournamentSlug,
+      categorySlug,
+    });
+    expect(detailAfterFirstRound.category.competitionMode).toBe("free");
+    expect(detailAfterFirstRound.groupStage).toBeNull();
+    expect(detailAfterFirstRound.freeStage?.rounds).toHaveLength(1);
+
+    await expect(
+      admin.mutation(api.tournaments.registerForCategory, {
+        tournamentSlug: created.tournamentSlug,
+        categorySlug,
+        teamName: "Late Team",
+      }),
+    ).rejects.toThrow(/TOURNAMENT_CATEGORY_FROZEN/);
+
+    const firstRoundView = detailAfterFirstRound.freeStage?.rounds[0];
+    expect(firstRoundView).toBeTruthy();
+
+    const pendingMatches = firstRoundView!.matches.filter((match) => match.status === "pending");
+    for (const match of pendingMatches) {
+      await admin.mutation(api.tournaments.reportCategoryFreeMatchResult, {
+        tournamentSlug: created.tournamentSlug,
+        categorySlug,
+        matchId: match.id as Id<"tournamentFreeMatches">,
+        winnerTeamId: match.teamA.id as Id<"tournamentTeams">,
+        scoreText: "6-4, 6-3",
+      });
+    }
+
+    await admin.mutation(api.tournaments.createCategoryFreeRound, {
+      tournamentSlug: created.tournamentSlug,
+      categorySlug,
+      sourceType: "random",
+      sourceRoundId: firstRoundView!.id as Id<"tournamentFreeRounds">,
+    });
+
+    const detailAfterSecondRound = await admin.query(api.tournaments.getTournamentCategoryBySlug, {
+      tournamentSlug: created.tournamentSlug,
+      categorySlug,
+    });
+    expect(detailAfterSecondRound.freeStage?.rounds).toHaveLength(2);
+    expect(detailAfterSecondRound.freeStage?.rounds[1]?.sourceRoundId).toBe(firstRoundView!.id);
+
+    const outsider = t.withIdentity({ subject: "free-outsider", phoneNumber: "+573001499999" });
+    await outsider.mutation(api.padel.upsertUser, {});
+    await outsider.mutation(api.padel.updateAlias, { alias: "Outsider" });
+    await expect(
+      outsider.mutation(api.tournaments.createCategoryFreeRound, {
+        tournamentSlug: created.tournamentSlug,
+        categorySlug,
+        sourceType: "random",
+      }),
+    ).rejects.toThrow(/FORBIDDEN/);
   });
 });

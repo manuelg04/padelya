@@ -3,11 +3,13 @@ import { NextRequest } from "next/server";
 import { resolveAuthToken, responseError, responseOk } from "@/src/backend/http";
 import { padelService } from "@/src/backend/padel-service";
 import { DomainError } from "@/src/domain/errors";
-import type { TournamentRegistrationStatus } from "@/src/domain/types";
+import type { TournamentFreeMatchResultInput } from "@/src/domain/types";
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ registrationId: string }> },
+  {
+    params,
+  }: { params: Promise<{ tournamentSlug: string; categorySlug: string; matchId: string }> },
 ) {
   try {
     const token = await resolveAuthToken(request);
@@ -15,12 +17,14 @@ export async function PATCH(
       throw new DomainError("UNAUTHORIZED", "No autorizado.");
     }
 
-    const { registrationId } = await params;
-    const body = (await request.json()) as { status: TournamentRegistrationStatus };
-    const result = await padelService.setTournamentRegistrationStatus(
+    const body = (await request.json()) as TournamentFreeMatchResultInput;
+    const { tournamentSlug, categorySlug, matchId } = await params;
+    const result = await padelService.reportTournamentFreeMatchResult(
       token,
-      decodeURIComponent(registrationId),
-      body.status,
+      decodeURIComponent(tournamentSlug),
+      decodeURIComponent(categorySlug),
+      decodeURIComponent(matchId),
+      body,
     );
 
     return responseOk(result);

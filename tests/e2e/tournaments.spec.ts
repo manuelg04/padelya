@@ -39,6 +39,54 @@ test.beforeEach(async ({ request }) => {
   await request.post("/api/test/reset");
 });
 
+test("admin crea torneo desde UI y el formulario se resetea", async ({ page, request }) => {
+  const adminPhone = "3009000901";
+  const adminToken = await createApiUser(request, adminPhone, "Admin UI");
+
+  const seeded = await request.post("/api/test/seed-club-admin", {
+    headers: {
+      Authorization: `Bearer ${adminToken}`,
+    },
+    data: {
+      clubSlug: "smash-club",
+      clubName: "Smash Club",
+      seedToken: "test-seed-token",
+    },
+  });
+  expect(seeded.ok()).toBeTruthy();
+
+  await page.goto(`/login?redirect=${encodeURIComponent("/admin/torneos")}`);
+  await completeAuth(page, adminPhone, "Admin UI");
+
+  await expect(page).toHaveURL(/\/admin\/torneos$/);
+  await page.getByTestId("admin-tournament-name").fill("Torneo UI Admin");
+  await page.getByTestId("admin-tournament-description").fill("Creado desde admin UI");
+  await page.getByTestId("admin-tournament-category-name-0").fill("Mixto Open");
+  await page.getByTestId("admin-tournament-create-btn").click();
+
+  await expect(page.getByText("Torneo creado:")).toBeVisible();
+  await expect(page.getByText("Torneo UI Admin")).toBeVisible();
+  await expect(page.getByTestId("admin-tournament-name")).toHaveValue("");
+  await expect(page.getByTestId("admin-tournament-description")).toHaveValue("");
+  await expect(page.getByTestId("admin-tournament-category-name-0")).toHaveValue("");
+});
+
+test("api admin torneos responde 401 sin token", async ({ request }) => {
+  const response = await request.post("/api/admin/tournaments", {
+    data: {
+      clubSlug: "smash-club",
+      name: "Torneo no auth",
+      startsAtLocal: "2030-03-20T18:00",
+      description: "No auth",
+      categories: [{ name: "Cat", capacity: 2 }],
+    },
+  });
+  expect(response.status()).toBe(401);
+
+  const payload = (await response.json()) as { error?: { code?: string } };
+  expect(payload.error?.code).toBe("UNAUTHORIZED");
+});
+
 test("happy path torneo por link: otp + inscripción + confirmación admin", async ({ page, request }) => {
   const adminToken = await createApiUser(request, "3009000001", "Admin Torneo");
 
@@ -400,6 +448,112 @@ test("iteración 3: admin reporta resultado y público ve tabla + clasificados e
   expect(detailPayload.category.groupStage?.matchesByGroup[0]?.matches.some((match) => match.status === "completed")).toBe(
     true,
   );
+
+  await publicContext.close();
+});
+
+test("modo libre: admin crea ronda, reporta resultado y público ve rondas libres", async ({
+  page,
+  request,
+  browser,
+}) => {
+  const adminPhone = "3009020100";
+  const adminToken = await createApiUser(request, adminPhone, "Admin Libre");
+
+  const seeded = await request.post("/api/test/seed-club-admin", {
+    headers: {
+      Authorization: `Bearer ${adminToken}`,
+    },
+    data: {
+      clubSlug: "smash-club",
+      clubName: "Smash Club",
+      seedToken: "test-seed-token",
+    },
+  });
+  expect(seeded.ok()).toBeTruthy();
+
+  const createdTournament = await request.post("/api/admin/tournaments", {
+    headers: {
+      Authorization: `Bearer ${adminToken}`,
+    },
+    data: {
+      clubSlug: "smash-club",
+      name: "Torneo Libre E2E",
+      startsAtLocal: "2030-02-24T18:00",
+      description: "Cruces libres",
+      categories: [{ name: "Mixto Free", competitionMode: "free", capacity: 5 }],
+    },
+  });
+  expect(createdTournament.ok()).toBeTruthy();
+  const createdBody = (await createdTournament.json()) as {
+    tournamentSlug: string;
+    categorySlugs: string[];
+  };
+
+  const tournamentSlug = createdBody.tournamentSlug;
+  const categorySlug = createdBody.categorySlugs[0]!;
+
+  for (let index = 1; index <= 5; index += 1) {
+    const token = await createApiUser(request, `30090202${index.toString().padStart(2, "0")}`, `Free E2E ${index}`);
+
+    const registration = await request.post(
+      `/api/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}/registrations`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        data: {
+          teamName: `Free Team ${index}`,
+        },
+      },
+    );
+    expect(registration.ok()).toBeTruthy();
+    const registrationPayload = (await registration.json()) as { registrationId: string };
+
+    const confirmed = await request.patch(
+      `/api/admin/tournaments/registrations/${encodeURIComponent(registrationPayload.registrationId)}/status`,
+      {
+        headers: {
+          Authorization: `Bearer ${adminToken}`,
+        },
+        data: { status: "confirmed" },
+      },
+    );
+    expect(confirmed.ok()).toBeTruthy();
+  }
+
+  await page.goto(`/admin/torneos/${tournamentSlug}/categorias/${categorySlug}`);
+  await completeAuth(page, adminPhone, "Admin Libre");
+
+  await expect(page.getByRole("heading", { name: "Operación libre" })).toBeVisible();
+  await page.getByRole("button", { name: "Crear ronda aleatoria" }).click();
+  await expect(page.getByText("Ronda libre creada.")).toBeVisible();
+
+  const pendingEditor = page.locator("div").filter({ hasText: "Estado: Pendiente" }).first();
+  await pendingEditor.getByPlaceholder("Ej: 6-4, 6-3 / W.O.").first().fill("6-4, 6-3");
+  await pendingEditor.getByRole("button", { name: "Guardar resultado" }).first().click();
+  await expect(page.getByText("Resultado libre guardado.")).toBeVisible();
+
+  const publicContext = await browser.newContext();
+  const publicPage = await publicContext.newPage();
+  await publicPage.goto(`${E2E_BASE_URL}/torneos/${tournamentSlug}/categorias/${categorySlug}`);
+  await expect(publicPage.getByRole("heading", { name: "Rondas libres" })).toBeVisible();
+  await expect(publicPage.getByText("Ronda 1")).toBeVisible();
+  await expect(publicPage.getByText("Resultado: 6-4, 6-3")).toBeVisible();
+
+  const lateToken = await createApiUser(request, "3009020399", "Late Free");
+  const frozenRegistration = await request.post(
+    `/api/tournaments/${encodeURIComponent(tournamentSlug)}/categorias/${encodeURIComponent(categorySlug)}/registrations`,
+    {
+      headers: {
+        Authorization: `Bearer ${lateToken}`,
+      },
+      data: {
+        teamName: "Late Free Team",
+      },
+    },
+  );
+  expect(frozenRegistration.ok()).toBeFalsy();
 
   await publicContext.close();
 });

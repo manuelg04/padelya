@@ -52,6 +52,54 @@ describe("PadelService tournaments", () => {
     expect(r2.status).toBe("waitlist");
   });
 
+  it("forces America/Bogota timezone on tournament creation", async () => {
+    const admin = await createUser(service, "+573110001091", "Admin");
+
+    await service.seedClubAndMembers({
+      clubSlug: "smash-club",
+      clubName: "Smash Club",
+      adminFirebaseUids: [admin.firebaseUid],
+      staffFirebaseUids: [],
+      seedToken: "test-seed-token",
+    });
+
+    const created = await service.createTournament(admin.token, {
+      clubSlug: "smash-club",
+      name: "Torneo TZ",
+      startsAtLocal: "2030-07-10T18:00",
+      timezone: "America/New_York",
+      description: "Desc",
+      categories: [{ name: "Mixto", capacity: 2 }],
+    });
+
+    const detail = await service.getTournamentBySlug(created.tournamentSlug);
+    expect(detail.tournament.timezone).toBe("America/Bogota");
+    expect(detail.tournament.startsAtUtc).toBe("2030-07-10T23:00:00.000Z");
+  });
+
+  it("allows tournament creation with date and optional empty time", async () => {
+    const admin = await createUser(service, "+573110001092", "Admin");
+
+    await service.seedClubAndMembers({
+      clubSlug: "smash-club",
+      clubName: "Smash Club",
+      adminFirebaseUids: [admin.firebaseUid],
+      staffFirebaseUids: [],
+      seedToken: "test-seed-token",
+    });
+
+    const created = await service.createTournament(admin.token, {
+      clubSlug: "smash-club",
+      name: "Torneo Solo Fecha",
+      startsAtDate: "2030-07-10",
+      description: "Desc",
+      categories: [{ name: "Mixto", capacity: 2 }],
+    });
+
+    const detail = await service.getTournamentBySlug(created.tournamentSlug);
+    expect(detail.tournament.startsAtUtc).toBe("2030-07-10T05:00:00.000Z");
+  });
+
   it("dedupes active registration and allows cancel by owner", async () => {
     const admin = await createUser(service, "+573110001011", "Admin");
     const player = await createUser(service, "+573110001012", "Play1");
@@ -261,10 +309,7 @@ describe("PadelService tournaments", () => {
       firstMatch!.id,
       {
         winnerTeamId: firstMatch!.teamA.id,
-        sets: [
-          { teamAGames: 6, teamBGames: 4 },
-          { teamAGames: 6, teamBGames: 3 },
-        ],
+        sets: [{ teamAGames: 8, teamBGames: 6 }],
       },
     );
 
@@ -272,6 +317,7 @@ describe("PadelService tournaments", () => {
     const firstMatchAfterReport = afterFirst.groupStage?.matchesByGroup[0]?.matches.find((match) => match.id === firstMatch!.id);
     expect(firstMatchAfterReport?.status).toBe("completed");
     expect(firstMatchAfterReport?.result?.winnerTeamId).toBe(firstMatch!.teamA.id);
+    expect(firstMatchAfterReport?.result?.sets).toHaveLength(1);
 
     await service.reportTournamentGroupMatchResult(
       admin.token,
@@ -379,5 +425,87 @@ describe("PadelService tournaments", () => {
     expect(firstStanding?.rows[1]?.qualified).toBe(true);
     expect(firstStanding?.hasUnresolvedTieAtQualificationCutoff).toBe(false);
     expect(finalDetail.groupStage?.qualifiedTeams.length).toBe(4);
+  });
+
+  it("runs free mode rounds with open results and next round from winners", async () => {
+    const admin = await createUser(service, "+573110001081", "Admin");
+
+    await service.seedClubAndMembers({
+      clubSlug: "smash-club",
+      clubName: "Smash Club",
+      adminFirebaseUids: [admin.firebaseUid],
+      staffFirebaseUids: [],
+      seedToken: "test-seed-token",
+    });
+
+    const created = await service.createTournament(admin.token, {
+      clubSlug: "smash-club",
+      name: "Torneo Libre",
+      startsAtLocal: "2030-02-10T18:00",
+      description: "Desc",
+      categories: [{ name: "Mixto Libre", competitionMode: "free", capacity: 5 }],
+    });
+    const categorySlug = created.categorySlugs[0]!;
+
+    for (let index = 1; index <= 5; index += 1) {
+      const player = await createUser(service, `+57311000108${index}`, `Free${index}`);
+      const registration = await service.registerForCategory(player.token, created.tournamentSlug, categorySlug, {
+        teamName: `Free Team ${index}`,
+      });
+      await service.setTournamentRegistrationStatus(admin.token, registration.registrationId, "confirmed");
+    }
+
+    const createdRound = await service.createTournamentFreeRound(admin.token, created.tournamentSlug, categorySlug, {
+      sourceType: "random",
+    });
+    expect(createdRound.matchesCount).toBe(3);
+    expect(createdRound.byeCount).toBe(1);
+
+    const detailAfterRound = await service.getTournamentCategoryBySlug(created.tournamentSlug, categorySlug, admin.token);
+    expect(detailAfterRound.category.competitionMode).toBe("free");
+    expect(detailAfterRound.groupStage).toBeNull();
+    expect(detailAfterRound.freeStage?.rounds).toHaveLength(1);
+
+    await expect(
+      service.registerForCategory(admin.token, created.tournamentSlug, categorySlug, { teamName: "Late Team" }),
+    ).rejects.toMatchObject<DomainError>({
+      code: "TOURNAMENT_CATEGORY_FROZEN",
+    });
+
+    const firstRound = detailAfterRound.freeStage?.rounds[0];
+    expect(firstRound).toBeTruthy();
+
+    const pendingMatches = firstRound!.matches.filter((match) => match.status === "pending");
+    for (const match of pendingMatches) {
+      await service.reportTournamentFreeMatchResult(
+        admin.token,
+        created.tournamentSlug,
+        categorySlug,
+        match.id,
+        {
+          winnerTeamId: match.teamA.id,
+          scoreText: "6-4, 6-3",
+        },
+      );
+    }
+
+    const secondRound = await service.createTournamentFreeRound(admin.token, created.tournamentSlug, categorySlug, {
+      sourceType: "random",
+      sourceRoundId: firstRound!.id,
+    });
+    expect(secondRound.matchesCount).toBeGreaterThan(0);
+
+    const detailAfterSecondRound = await service.getTournamentCategoryBySlug(created.tournamentSlug, categorySlug, admin.token);
+    expect(detailAfterSecondRound.freeStage?.rounds).toHaveLength(2);
+    expect(detailAfterSecondRound.freeStage?.rounds[1]?.sourceRoundId).toBe(firstRound!.id);
+
+    const outsider = await createUser(service, "+573110001099", "Outsider");
+    await expect(
+      service.createTournamentFreeRound(outsider.token, created.tournamentSlug, categorySlug, {
+        sourceType: "random",
+      }),
+    ).rejects.toMatchObject<DomainError>({
+      code: "FORBIDDEN",
+    });
   });
 });

@@ -21,15 +21,19 @@ import {
 import type {
   AdminCategoryDashboard,
   PublicTournamentCategoryDetail,
+  TournamentFreeMatchResultInput,
+  TournamentFreeRoundCreateRequest,
   TournamentRegistrationStatus,
   TournamentSetScore,
 } from "@/src/domain/types";
 import {
+  createAdminTournamentFreeRound,
   generateAdminTournamentGroupMatches,
   generateAdminTournamentGroups,
   getAdminTournamentCategoryDashboard,
   getTournamentCategoryBySlug,
   moveAdminTournamentTeamGroup,
+  reportAdminTournamentFreeMatchResult,
   reportAdminTournamentGroupMatchResult,
   setAdminTournamentRegistrationStatus,
   updateAdminClubPaymentInstructions,
@@ -52,6 +56,14 @@ function groupsReadyForFixture(categoryDetail: PublicTournamentCategoryDetail): 
 }
 
 type GroupMatchView = NonNullable<PublicTournamentCategoryDetail["groupStage"]>["matchesByGroup"][number]["matches"][number];
+type FreeRoundView = NonNullable<PublicTournamentCategoryDetail["freeStage"]>["rounds"][number];
+type FreeMatchView = FreeRoundView["matches"][number];
+const REGISTRATION_STATUS_LABEL: Record<TournamentRegistrationStatus, string> = {
+  pending: "Inscritas sin pago confirmado",
+  confirmed: "Pago confirmado",
+  waitlist: "Lista de espera",
+  cancelled: "Bajas / canceladas",
+};
 
 function buildEditableSets(match: GroupMatchView): Array<{ teamAGames: string; teamBGames: string }> {
   const source = match.result?.sets ?? [];
@@ -66,6 +78,13 @@ function formatMatchResult(match: GroupMatchView): string {
     return "Pendiente";
   }
   return `${match.result.sets.map((set) => `${set.teamAGames}-${set.teamBGames}`).join(" / ")}`;
+}
+
+function formatFreeMatchResult(match: FreeMatchView): string {
+  if (!match.result) {
+    return "Pendiente";
+  }
+  return match.result.scoreText;
 }
 
 function MatchResultEditor({
@@ -98,18 +117,18 @@ function MatchResultEditor({
   );
 
   const handleSave = useCallback(async () => {
-    const firstTwo = sets.slice(0, 2);
-    if (firstTwo.some((set) => !set.teamAGames.trim() || !set.teamBGames.trim())) {
-      setLocalError("Debes completar al menos 2 sets.");
+    const candidateSets = sets.filter(
+      (set) => Boolean(set.teamAGames.trim()) || Boolean(set.teamBGames.trim()),
+    );
+    if (candidateSets.length === 0) {
+      setLocalError("Debes completar al menos 1 set.");
       return;
     }
 
-    const candidateSets = sets
-      .slice(0, 3)
-      .filter(
-        (set, index) =>
-          index < 2 || Boolean(set.teamAGames.trim()) || Boolean(set.teamBGames.trim()),
-      );
+    if (candidateSets.some((set) => !set.teamAGames.trim() || !set.teamBGames.trim())) {
+      setLocalError("Cada set debe tener marcador para ambos equipos.");
+      return;
+    }
 
     const parsedSets = candidateSets.map((set) => ({
       teamAGames: Number(set.teamAGames),
@@ -196,6 +215,85 @@ function MatchResultEditor({
   );
 }
 
+function FreeMatchResultEditor({
+  match,
+  onSave,
+  isSubmitting,
+}: {
+  match: FreeMatchView;
+  onSave: (matchId: string, payload: TournamentFreeMatchResultInput) => Promise<void>;
+  isSubmitting: boolean;
+}) {
+  const [winnerTeamId, setWinnerTeamId] = useState(
+    match.result?.winnerTeamId ?? match.teamB?.id ?? match.teamA.id,
+  );
+  const [scoreText, setScoreText] = useState(match.result?.scoreText ?? "");
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  const handleSave = useCallback(async () => {
+    const normalized = scoreText.trim();
+    if (!normalized) {
+      setLocalError("Debes ingresar el resultado.");
+      return;
+    }
+
+    try {
+      setLocalError(null);
+      await onSave(match.id, {
+        winnerTeamId,
+        scoreText: normalized,
+      });
+    } catch {
+      return;
+    }
+  }, [match.id, onSave, scoreText, winnerTeamId]);
+
+  return (
+    <div className="space-y-2 rounded-md border border-zinc-200 p-3">
+      <p className="text-sm font-medium">
+        {match.teamA.teamName} vs {match.teamB?.teamName ?? "BYE"}
+      </p>
+      <p className="text-xs text-zinc-500">Estado: {match.status === "completed" ? "Completado" : "Pendiente"}</p>
+      <p className="text-xs text-zinc-600">Marcador actual: {formatFreeMatchResult(match)}</p>
+
+      <div className="space-y-1.5">
+        <Label htmlFor={`free-winner-${match.id}`} className="text-xs text-zinc-500">
+          Ganador
+        </Label>
+        <select
+          id={`free-winner-${match.id}`}
+          className="h-9 w-full rounded-md border border-zinc-300 bg-white px-2 text-sm"
+          value={winnerTeamId}
+          onChange={(event) => setWinnerTeamId(event.target.value)}
+          disabled={isSubmitting || !match.teamB}
+        >
+          <option value={match.teamA.id}>{match.teamA.teamName}</option>
+          {match.teamB ? <option value={match.teamB.id}>{match.teamB.teamName}</option> : null}
+        </select>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor={`free-score-${match.id}`} className="text-xs text-zinc-500">
+          Resultado libre
+        </Label>
+        <Input
+          id={`free-score-${match.id}`}
+          value={scoreText}
+          onChange={(event) => setScoreText(event.target.value)}
+          placeholder="Ej: 6-4, 6-3 / W.O."
+          disabled={isSubmitting}
+        />
+      </div>
+
+      {localError ? <p className="text-xs text-rose-700">{localError}</p> : null}
+
+      <Button className="w-full" size="sm" disabled={isSubmitting} onClick={() => void handleSave()}>
+        {match.status === "completed" ? "Actualizar resultado" : "Guardar resultado"}
+      </Button>
+    </div>
+  );
+}
+
 function AdminCategoryContent({
   dashboard,
   categoryDetail,
@@ -207,6 +305,8 @@ function AdminCategoryContent({
   onMoveTeamGroup,
   onGenerateMatches,
   onReportMatchResult,
+  onCreateFreeRound,
+  onReportFreeMatchResult,
   error,
   feedback,
   isSubmitting,
@@ -221,6 +321,8 @@ function AdminCategoryContent({
   onMoveTeamGroup: (teamId: string, targetGroupName: string) => Promise<void>;
   onGenerateMatches: () => Promise<void>;
   onReportMatchResult: (matchId: string, payload: { winnerTeamId: string; sets: TournamentSetScore[] }) => Promise<void>;
+  onCreateFreeRound: (payload: TournamentFreeRoundCreateRequest) => Promise<void>;
+  onReportFreeMatchResult: (matchId: string, payload: TournamentFreeMatchResultInput) => Promise<void>;
   error: string | null;
   feedback: string | null;
   isSubmitting: boolean;
@@ -231,11 +333,23 @@ function AdminCategoryContent({
     dashboard.category.slug,
   );
 
+  const competitionMode = categoryDetail.category.competitionMode;
   const groupStage = categoryDetail.groupStage;
-  const categoryFrozen = Boolean(groupStage);
+  const freeStage = categoryDetail.freeStage;
+  const categoryFrozen = Boolean(groupStage || freeStage);
   const fixtureGenerated = hasGeneratedGroupMatches(categoryDetail);
   const canGenerateGroups = !groupStage;
   const canGenerateMatches = Boolean(groupStage) && !fixtureGenerated && groupsReadyForFixture(categoryDetail);
+  const confirmedTeams = dashboard.registrations.confirmed.map((registration) => ({
+    id: registration.teamId,
+    name: registration.teamName,
+  }));
+  const latestFreeRound = freeStage?.rounds[freeStage.rounds.length - 1] ?? null;
+
+  const [manualRoundName, setManualRoundName] = useState("");
+  const [manualPairings, setManualPairings] = useState<Array<{ teamAId: string; teamBId: string }>>([
+    { teamAId: "", teamBId: "" },
+  ]);
 
   async function copyText(text: string) {
     await navigator.clipboard.writeText(text);
@@ -254,12 +368,13 @@ function AdminCategoryContent({
             <p>
               Confirmados {dashboard.category.counts.confirmed}/{dashboard.category.capacity}
             </p>
+            <p>Cupos disponibles {categoryDetail.category.slotsRemaining}</p>
             <p>
-              Pending {dashboard.category.counts.pending} · Waitlist {dashboard.category.counts.waitlist} · Cancelled {dashboard.category.counts.cancelled}
+              Sin pago confirmado {dashboard.category.counts.pending} · Lista de espera {dashboard.category.counts.waitlist} · Bajas {dashboard.category.counts.cancelled}
             </p>
             {categoryFrozen ? (
               <p className="text-amber-700">
-                Categoría congelada: no se permiten cambios de inscripción después de generar grupos.
+                Categoría congelada: no se permiten cambios de inscripción después de iniciar la competencia.
               </p>
             ) : null}
           </CardContent>
@@ -277,67 +392,171 @@ function AdminCategoryContent({
           </Card>
         ) : null}
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Operación de grupos</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {canGenerateGroups ? (
-              <Button className="w-full" onClick={() => void onGenerateGroups()} disabled={isSubmitting}>
-                Generar grupos
-              </Button>
-            ) : null}
+        {competitionMode === "groups" ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Operación de grupos</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {canGenerateGroups ? (
+                <Button className="w-full" onClick={() => void onGenerateGroups()} disabled={isSubmitting}>
+                  Generar grupos
+                </Button>
+              ) : null}
 
-            {groupStage ? (
-              <div className="space-y-3">
-                {groupStage.groups.map((group) => (
-                  <div key={group.id} className="space-y-2 rounded-lg border border-zinc-200 p-3">
-                    <p className="text-sm font-semibold">Grupo {group.name}</p>
-                    {group.teams.length === 0 ? (
-                      <p className="text-xs text-zinc-500">Sin equipos.</p>
-                    ) : (
-                      group.teams.map((team) => (
-                        <div key={team.id} className="space-y-1 rounded-md border border-zinc-100 p-2">
-                          <p className="text-sm">{team.teamName}</p>
-                          <Label htmlFor={`group-${team.id}`} className="text-xs text-zinc-500">
-                            Grupo
-                          </Label>
-                          <select
-                            id={`group-${team.id}`}
-                            className="h-9 w-full rounded-md border border-zinc-300 bg-white px-2 text-sm"
-                            value={group.name}
-                            disabled={isSubmitting || fixtureGenerated}
-                            onChange={(event) => void onMoveTeamGroup(team.id, event.target.value)}
-                          >
-                            {groupStage.groups.map((optionGroup) => (
-                              <option key={`${team.id}-${optionGroup.id}`} value={optionGroup.name}>
-                                {optionGroup.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      ))
-                    )}
+              {groupStage ? (
+                <div className="space-y-3">
+                  {groupStage.groups.map((group) => (
+                    <div key={group.id} className="space-y-2 rounded-lg border border-zinc-200 p-3">
+                      <p className="text-sm font-semibold">Grupo {group.name}</p>
+                      {group.teams.length === 0 ? (
+                        <p className="text-xs text-zinc-500">Sin equipos.</p>
+                      ) : (
+                        group.teams.map((team) => (
+                          <div key={team.id} className="space-y-1 rounded-md border border-zinc-100 p-2">
+                            <p className="text-sm">{team.teamName}</p>
+                            <Label htmlFor={`group-${team.id}`} className="text-xs text-zinc-500">
+                              Grupo
+                            </Label>
+                            <select
+                              id={`group-${team.id}`}
+                              className="h-9 w-full rounded-md border border-zinc-300 bg-white px-2 text-sm"
+                              value={group.name}
+                              disabled={isSubmitting || fixtureGenerated}
+                              onChange={(event) => void onMoveTeamGroup(team.id, event.target.value)}
+                            >
+                              {groupStage.groups.map((optionGroup) => (
+                                <option key={`${team.id}-${optionGroup.id}`} value={optionGroup.name}>
+                                  {optionGroup.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  ))}
+
+                  {fixtureGenerated ? (
+                    <p className="text-sm text-zinc-700">Partidos de grupos ya generados.</p>
+                  ) : (
+                    <Button
+                      className="w-full"
+                      disabled={isSubmitting || !canGenerateMatches}
+                      onClick={() => void onGenerateMatches()}
+                    >
+                      Generar partidos de grupos
+                    </Button>
+                  )}
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Operación libre</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Button
+                className="w-full"
+                onClick={() =>
+                  void onCreateFreeRound({
+                    sourceType: "random",
+                    sourceRoundId: latestFreeRound?.id,
+                  })
+                }
+                disabled={isSubmitting || confirmedTeams.length === 0}
+              >
+                {latestFreeRound ? "Crear siguiente ronda aleatoria (ganadores)" : "Crear ronda aleatoria"}
+              </Button>
+
+              <div className="space-y-2 rounded-lg border border-zinc-200 p-3">
+                <p className="text-sm font-semibold">Ronda manual</p>
+                <Input
+                  value={manualRoundName}
+                  onChange={(event) => setManualRoundName(event.target.value)}
+                  placeholder="Nombre ronda (opcional)"
+                  disabled={isSubmitting}
+                />
+
+                {manualPairings.map((pairing, index) => (
+                  <div key={`pairing-${index}`} className="grid grid-cols-2 gap-2">
+                    <select
+                      className="h-9 w-full rounded-md border border-zinc-300 bg-white px-2 text-sm"
+                      value={pairing.teamAId}
+                      disabled={isSubmitting}
+                      onChange={(event) =>
+                        setManualPairings((current) =>
+                          current.map((item, itemIndex) =>
+                            itemIndex === index ? { ...item, teamAId: event.target.value } : item,
+                          ),
+                        )
+                      }
+                    >
+                      <option value="">Equipo A</option>
+                      {confirmedTeams.map((team) => (
+                        <option key={`team-a-${index}-${team.id}`} value={team.id}>
+                          {team.name}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className="h-9 w-full rounded-md border border-zinc-300 bg-white px-2 text-sm"
+                      value={pairing.teamBId}
+                      disabled={isSubmitting}
+                      onChange={(event) =>
+                        setManualPairings((current) =>
+                          current.map((item, itemIndex) =>
+                            itemIndex === index ? { ...item, teamBId: event.target.value } : item,
+                          ),
+                        )
+                      }
+                    >
+                      <option value="">BYE</option>
+                      {confirmedTeams.map((team) => (
+                        <option key={`team-b-${index}-${team.id}`} value={team.id}>
+                          {team.name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 ))}
 
-                {fixtureGenerated ? (
-                  <p className="text-sm text-zinc-700">Partidos de grupos ya generados.</p>
-                ) : (
-                  <Button
-                    className="w-full"
-                    disabled={isSubmitting || !canGenerateMatches}
-                    onClick={() => void onGenerateMatches()}
-                  >
-                    Generar partidos de grupos
-                  </Button>
-                )}
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  disabled={isSubmitting}
+                  onClick={() => setManualPairings((current) => [...current, { teamAId: "", teamBId: "" }])}
+                >
+                  Agregar cruce manual
+                </Button>
 
-        {groupStage ? (
+                <Button
+                  className="w-full"
+                  disabled={isSubmitting}
+                  onClick={() =>
+                    void onCreateFreeRound({
+                      name: manualRoundName || undefined,
+                      sourceType: "manual",
+                      sourceRoundId: latestFreeRound?.id,
+                      manualPairings: manualPairings
+                        .filter((pairing) => pairing.teamAId)
+                        .map((pairing) => ({
+                          teamAId: pairing.teamAId,
+                          teamBId: pairing.teamBId || null,
+                        })),
+                    })
+                  }
+                >
+                  {latestFreeRound ? "Crear siguiente ronda manual (ganadores)" : "Crear ronda manual"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {competitionMode === "groups" && groupStage ? (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Resultados de grupos</CardTitle>
@@ -360,6 +579,35 @@ function AdminCategoryContent({
               ) : (
                 <p className="text-sm text-zinc-600">Genera el fixture para empezar a reportar resultados.</p>
               )}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {competitionMode === "free" && freeStage ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Resultados libres</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {freeStage.rounds.map((round) => (
+                <div key={`free-round-${round.id}`} className="space-y-2 rounded-lg border border-zinc-200 p-3">
+                  <p className="text-sm font-semibold">
+                    {round.name} · {round.sourceType === "random" ? "Aleatoria" : "Manual"}
+                  </p>
+                  {round.matches.length === 0 ? (
+                    <p className="text-sm text-zinc-500">Sin cruces.</p>
+                  ) : (
+                    round.matches.map((match) => (
+                      <FreeMatchResultEditor
+                        key={`${match.id}-${match.status}-${match.result?.winnerTeamId ?? "none"}-${match.result?.scoreText ?? "none"}`}
+                        match={match}
+                        onSave={onReportFreeMatchResult}
+                        isSubmitting={isSubmitting}
+                      />
+                    ))
+                  )}
+                </div>
+              ))}
             </CardContent>
           </Card>
         ) : null}
@@ -406,7 +654,7 @@ function AdminCategoryContent({
         {(["pending", "confirmed", "waitlist", "cancelled"] as const).map((status) => (
           <Card key={status}>
             <CardHeader>
-              <CardTitle className="text-base uppercase">{status}</CardTitle>
+              <CardTitle className="text-base">{REGISTRATION_STATUS_LABEL[status]}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
               {dashboard.registrations[status].length === 0 ? (
@@ -433,7 +681,7 @@ function AdminCategoryContent({
                         onClick={() => void onChangeStatus(registration.id, "waitlist")}
                         disabled={isSubmitting || categoryFrozen}
                       >
-                        Waitlist
+                        En espera
                       </Button>
                       <Button
                         variant="outline"
@@ -441,7 +689,7 @@ function AdminCategoryContent({
                         onClick={() => void onChangeStatus(registration.id, "pending")}
                         disabled={isSubmitting || categoryFrozen}
                       >
-                        Pending
+                        Sin pago
                       </Button>
                       <Button
                         variant="outline"
@@ -486,8 +734,8 @@ function useAdminActions(
         return;
       }
 
-      if (categoryDetail?.groupStage) {
-        setError("La categoría está congelada después de generar grupos.");
+      if (categoryDetail?.groupStage || categoryDetail?.freeStage) {
+        setError("La categoría está congelada después de iniciar la competencia.");
         return;
       }
 
@@ -503,7 +751,7 @@ function useAdminActions(
         setIsSubmitting(false);
       }
     },
-    [categoryDetail?.groupStage, reload, token],
+    [categoryDetail?.freeStage, categoryDetail?.groupStage, reload, token],
   );
 
   const onSavePayment = useCallback(async () => {
@@ -602,6 +850,48 @@ function useAdminActions(
     [categorySlug, reload, token, tournamentSlug],
   );
 
+  const onCreateFreeRound = useCallback(
+    async (payload: TournamentFreeRoundCreateRequest) => {
+      if (!token) {
+        return;
+      }
+
+      try {
+        setIsSubmitting(true);
+        setError(null);
+        await createAdminTournamentFreeRound(token, tournamentSlug, categorySlug, payload);
+        setFeedback("Ronda libre creada.");
+        await reload();
+      } catch (nextError) {
+        setError(toErrorMessage(nextError));
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [categorySlug, reload, token, tournamentSlug],
+  );
+
+  const onReportFreeMatchResult = useCallback(
+    async (matchId: string, payload: TournamentFreeMatchResultInput) => {
+      if (!token) {
+        return;
+      }
+
+      try {
+        setIsSubmitting(true);
+        setError(null);
+        await reportAdminTournamentFreeMatchResult(token, tournamentSlug, categorySlug, matchId, payload);
+        setFeedback("Resultado libre guardado.");
+        await reload();
+      } catch (nextError) {
+        setError(toErrorMessage(nextError));
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [categorySlug, reload, token, tournamentSlug],
+  );
+
   return {
     paymentInstructions,
     setPaymentInstructions,
@@ -614,6 +904,8 @@ function useAdminActions(
     onMoveTeamGroup,
     onGenerateMatches,
     onReportMatchResult,
+    onCreateFreeRound,
+    onReportFreeMatchResult,
   };
 }
 
@@ -671,6 +963,8 @@ function ConvexAdminCategoryPage() {
       onMoveTeamGroup={actions.onMoveTeamGroup}
       onGenerateMatches={actions.onGenerateMatches}
       onReportMatchResult={actions.onReportMatchResult}
+      onCreateFreeRound={actions.onCreateFreeRound}
+      onReportFreeMatchResult={actions.onReportFreeMatchResult}
       error={actions.error}
       feedback={actions.feedback}
       isSubmitting={actions.isSubmitting}
@@ -751,6 +1045,8 @@ function MockAdminCategoryPage() {
       onMoveTeamGroup={actions.onMoveTeamGroup}
       onGenerateMatches={actions.onGenerateMatches}
       onReportMatchResult={actions.onReportMatchResult}
+      onCreateFreeRound={actions.onCreateFreeRound}
+      onReportFreeMatchResult={actions.onReportFreeMatchResult}
       error={actions.error}
       feedback={actions.feedback}
       isSubmitting={actions.isSubmitting}

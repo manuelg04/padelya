@@ -13,6 +13,8 @@ import type {
   PublicTournamentDetail,
   PushSubscriptionPayload,
   PushSubscriptionState,
+  TournamentFreeMatchResultInput,
+  TournamentFreeRoundCreateRequest,
   TournamentRegistrationRequest,
   TournamentRegistrationStatus,
   TournamentSetScore,
@@ -94,6 +96,19 @@ export interface BackendPadelService {
       winnerTeamId: string;
       sets: TournamentSetScore[];
     },
+  ): MaybePromise<{ matchId: string; status: "completed" }>;
+  createTournamentFreeRound(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+    payload: TournamentFreeRoundCreateRequest,
+  ): MaybePromise<{ roundId: string; matchesCount: number; byeCount: number }>;
+  reportTournamentFreeMatchResult(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+    matchId: string,
+    payload: TournamentFreeMatchResultInput,
   ): MaybePromise<{ matchId: string; status: "completed" }>;
   registerForCategory(
     token: string,

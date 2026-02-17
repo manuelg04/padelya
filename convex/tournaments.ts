@@ -4,7 +4,7 @@ import type { QueryCtx, MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 
 import { getOptionalUser, requireOrCreateUser, requireUser } from "./padel/auth";
-import { bogotaLocalToUtcIso, nowIso } from "./padel/date_time";
+import { localDateTimeToUtcIso, nowIso } from "./padel/date_time";
 import { upsertUserByFirebaseUid } from "./padel/users_repo";
 import { assertClubAdmin } from "./tournaments/authz";
 import {
@@ -18,6 +18,9 @@ import {
   getTournamentGroupByCategoryName,
   listClubMembershipsForUser,
   listConfirmedRegistrationsByCategory,
+  listTournamentFreeMatchesByCategory,
+  listTournamentFreeMatchesByRound,
+  listTournamentFreeRoundsByCategory,
   listRegistrationsByCategory,
   listTournamentCategories,
   listTournamentGroupsByCategory,
@@ -42,6 +45,10 @@ type TournamentSetScore = {
   teamAGames: number;
   teamBGames: number;
 };
+
+type TournamentCompetitionMode = "groups" | "free";
+
+type FreeRoundSourceType = "manual" | "random";
 
 type TournamentStandingRow = {
   team: TournamentTeamView;
@@ -70,6 +77,10 @@ const ALLOWED_GROUP_TEAM_COUNTS = new Set([8, 12, 16]);
 const MATCH_RESULT_SET_VALIDATOR = v.object({
   teamAGames: v.number(),
   teamBGames: v.number(),
+});
+const FREE_ROUND_PAIRING_VALIDATOR = v.object({
+  teamAId: v.id("tournamentTeams"),
+  teamBId: v.optional(v.id("tournamentTeams")),
 });
 
 function ensureNonEmpty(value: string): string {
@@ -126,6 +137,100 @@ function buildRandomGroups(teamIds: Id<"tournamentTeams">[], groupCount: number)
   return groups;
 }
 
+function normalizeCompetitionMode(value?: string): TournamentCompetitionMode {
+  return value === "free" ? "free" : "groups";
+}
+
+type TournamentFreePairing = {
+  teamAId: Id<"tournamentTeams">;
+  teamBId: Id<"tournamentTeams"> | null;
+};
+
+function assertUniqueTeamIds(teamIds: Id<"tournamentTeams">[]): void {
+  if (teamIds.length === 0) {
+    throw new Error("VALIDATION_ERROR");
+  }
+
+  const unique = new Set(teamIds);
+  if (unique.size !== teamIds.length) {
+    throw new Error("VALIDATION_ERROR");
+  }
+}
+
+function buildRandomFreePairings(teamIds: Id<"tournamentTeams">[]): TournamentFreePairing[] {
+  assertUniqueTeamIds(teamIds);
+  const shuffled = shuffleInPlace([...teamIds]);
+
+  const pairings: TournamentFreePairing[] = [];
+  for (let index = 0; index < shuffled.length; index += 2) {
+    const teamAId = shuffled[index];
+    if (!teamAId) {
+      continue;
+    }
+    pairings.push({
+      teamAId,
+      teamBId: shuffled[index + 1] ?? null,
+    });
+  }
+
+  return pairings;
+}
+
+function buildManualFreePairings(
+  teamIds: Id<"tournamentTeams">[],
+  manualPairings: Array<{ teamAId: Id<"tournamentTeams">; teamBId?: Id<"tournamentTeams"> }>,
+): TournamentFreePairing[] {
+  assertUniqueTeamIds(teamIds);
+
+  if (manualPairings.length === 0 && teamIds.length > 1) {
+    throw new Error("VALIDATION_ERROR");
+  }
+
+  const available = new Set(teamIds);
+  const used = new Set<Id<"tournamentTeams">>();
+  const normalized: TournamentFreePairing[] = [];
+
+  for (const pairing of manualPairings) {
+    const teamAId = pairing.teamAId;
+    const teamBId = pairing.teamBId ?? null;
+
+    if (!available.has(teamAId) || used.has(teamAId)) {
+      throw new Error("VALIDATION_ERROR");
+    }
+    if (teamBId !== null) {
+      if (!available.has(teamBId) || used.has(teamBId)) {
+        throw new Error("VALIDATION_ERROR");
+      }
+      if (teamAId === teamBId) {
+        throw new Error("VALIDATION_ERROR");
+      }
+    }
+
+    used.add(teamAId);
+    if (teamBId !== null) {
+      used.add(teamBId);
+    }
+
+    normalized.push({
+      teamAId,
+      teamBId,
+    });
+  }
+
+  const remaining = teamIds.filter((teamId) => !used.has(teamId));
+  if (remaining.length > 1) {
+    throw new Error("VALIDATION_ERROR");
+  }
+  if (remaining.length === 1) {
+    normalized.push({
+      teamAId: remaining[0] as Id<"tournamentTeams">,
+      teamBId: null,
+    });
+  }
+
+  return normalized;
+}
+
 async function requireTournamentBySlugOrThrow(tournamentSlug: string, ctx: ReadCtx) {
   const tournament = await getTournamentBySlugFromRepo(ctx, tournamentSlug);
   if (!tournament) {
@@ -162,6 +267,16 @@ async function buildCategoryCounts(ctx: ReadCtx, categoryId: Parameters<typeof c
   };
 }
 
+function getSlotsRemaining(
+  capacity: number,
+  counts: {
+    pending: number;
+    confirmed: number;
+  },
+): number {
+  return Math.max(capacity - (counts.pending + counts.confirmed), 0);
+}
+
 function normalizeOptionalText(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
@@ -170,9 +285,35 @@ function normalizeOptionalText(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function resolveTournamentStartsAtLocal(input: {
+  startsAtLocal?: string;
+  startsAtDate?: string;
+  startsAtTime?: string;
+}): string {
+  const startsAtLocal = normalizeOptionalText(input.startsAtLocal);
+  if (startsAtLocal) {
+    return startsAtLocal;
+  }
+
+  const startsAtDate = normalizeOptionalText(input.startsAtDate);
+  if (!startsAtDate || !/^\d{4}-\d{2}-\d{2}$/.test(startsAtDate)) {
+    throw new Error("VALIDATION_ERROR");
+  }
+
+  const startsAtTime = normalizeOptionalText(input.startsAtTime);
+  if (startsAtTime && !/^\d{2}:\d{2}$/.test(startsAtTime)) {
+    throw new Error("VALIDATION_ERROR");
+  }
+
+  return `${startsAtDate}T${startsAtTime ?? "00:00"}`;
+}
+
 async function isCategoryFrozen(ctx: ReadCtx, categoryId: Id<"tournamentCategories">): Promise<boolean> {
-  const groups = await listTournamentGroupsByCategory(ctx, categoryId);
-  return groups.length > 0;
+  const [groups, freeRounds] = await Promise.all([
+    listTournamentGroupsByCategory(ctx, categoryId),
+    listTournamentFreeRoundsByCategory(ctx, categoryId),
+  ]);
+  return groups.length > 0 || freeRounds.length > 0;
 }
 
 async function assertCategoryNotFrozen(ctx: ReadCtx, categoryId: Id<"tournamentCategories">): Promise<void> {
@@ -191,7 +332,7 @@ function validateAndNormalizeReportedResult(input: {
     throw new Error("VALIDATION_ERROR");
   }
 
-  if (input.sets.length < 2 || input.sets.length > 3) {
+  if (input.sets.length < 1 || input.sets.length > 5) {
     throw new Error("VALIDATION_ERROR");
   }
 
@@ -218,7 +359,8 @@ function validateAndNormalizeReportedResult(input: {
   });
 
   const winnerSetsWon = input.winnerTeamId === input.teamAId ? teamASetsWon : teamBSetsWon;
-  if (winnerSetsWon !== 2) {
+  const loserSetsWon = input.winnerTeamId === input.teamAId ? teamBSetsWon : teamASetsWon;
+  if (winnerSetsWon === 0 || winnerSetsWon <= loserSetsWon) {
     throw new Error("VALIDATION_ERROR");
   }
 
@@ -248,6 +390,35 @@ function buildMatchResultView(match: {
       teamBGames: set.teamBGames,
     })),
   };
+}
+
+function buildFreeMatchResultView(match: {
+  status: "pending" | "completed";
+  winnerTeamId?: Id<"tournamentTeams">;
+  scoreText?: string;
+  resultMeta?: Record<string, string | number | boolean | null>;
+}): {
+  winnerTeamId: string;
+  scoreText: string;
+  resultMeta: Record<string, string | number | boolean | null> | null;
+} | null {
+  if (match.status !== "completed") {
+    return null;
+  }
+  if (!match.winnerTeamId || !match.scoreText) {
+    return null;
+  }
+  return {
+    winnerTeamId: String(match.winnerTeamId),
+    scoreText: match.scoreText,
+    resultMeta: match.resultMeta ?? null,
+  };
+}
+
+function ensureCategoryMode(category: { competitionMode?: TournamentCompetitionMode }, expected: TournamentCompetitionMode) {
+  if (normalizeCompetitionMode(category.competitionMode) !== expected) {
+    throw new Error("VALIDATION_ERROR");
+  }
 }
 
 function toTeamView(team: TournamentTeamWithMeta): TournamentTeamView {
@@ -606,6 +777,153 @@ async function buildCategoryGroupStage(
   };
 }
 
+async function buildCategoryFreeStage(
+  ctx: ReadCtx,
+  categoryId: Id<"tournamentCategories">,
+  myTeamId?: Id<"tournamentTeams">,
+) {
+  const rounds = await listTournamentFreeRoundsByCategory(ctx, categoryId);
+  if (rounds.length === 0) {
+    return {
+      freeStage: null,
+      myFreeMatches: [] as Array<{
+        id: string;
+        roundName: string;
+        order: number;
+        status: "pending" | "completed";
+        teamA: TournamentTeamView;
+        teamB: TournamentTeamView | null;
+        result: {
+          winnerTeamId: string;
+          scoreText: string;
+          resultMeta: Record<string, string | number | boolean | null> | null;
+        } | null;
+      }>,
+    };
+  }
+
+  const matches = await listTournamentFreeMatchesByCategory(ctx, categoryId);
+  const teamIds = matches.flatMap((match) => [match.teamAId, match.teamBId].filter((teamId): teamId is Id<"tournamentTeams"> => Boolean(teamId)));
+  const teamViews = await buildTeamViewsById(ctx, teamIds);
+
+  const roundNameById = new Map(rounds.map((round) => [round._id, round.name] as const));
+  const myFreeMatches = matches
+    .filter((match) => myTeamId && (match.teamAId === myTeamId || match.teamBId === myTeamId))
+    .map((match) => {
+      const teamA = teamViews.get(match.teamAId);
+      const teamB = match.teamBId ? teamViews.get(match.teamBId) : null;
+      if (!teamA || (match.teamBId && !teamB)) {
+        return null;
+      }
+      return {
+        id: String(match._id),
+        roundName: roundNameById.get(match.roundId) ?? "",
+        order: match.order,
+        status: match.status,
+        teamA: toTeamView(teamA),
+        teamB: teamB ? toTeamView(teamB) : null,
+        result: buildFreeMatchResultView(match),
+      };
+    })
+    .filter(
+      (
+        entry,
+      ): entry is {
+        id: string;
+        roundName: string;
+        order: number;
+        status: "pending" | "completed";
+        teamA: TournamentTeamView;
+        teamB: TournamentTeamView | null;
+        result: {
+          winnerTeamId: string;
+          scoreText: string;
+          resultMeta: Record<string, string | number | boolean | null> | null;
+        } | null;
+      } => Boolean(entry),
+    );
+
+  return {
+    freeStage: {
+      generatedAt: rounds[0]?.createdAt ?? nowIso(),
+      rounds: rounds.map((round) => ({
+        id: String(round._id),
+        name: round.name,
+        order: round.order,
+        sourceType: round.sourceType,
+        sourceRoundId: round.sourceRoundId ? String(round.sourceRoundId) : null,
+        matches: matches
+          .filter((match) => match.roundId === round._id)
+          .map((match) => {
+            const teamA = teamViews.get(match.teamAId);
+            const teamB = match.teamBId ? teamViews.get(match.teamBId) : null;
+            if (!teamA || (match.teamBId && !teamB)) {
+              return null;
+            }
+            return {
+              id: String(match._id),
+              order: match.order,
+              status: match.status,
+              teamA: toTeamView(teamA),
+              teamB: teamB ? toTeamView(teamB) : null,
+              result: buildFreeMatchResultView(match),
+            };
+          })
+          .filter(
+            (
+              entry,
+            ): entry is {
+              id: string;
+              order: number;
+              status: "pending" | "completed";
+              teamA: TournamentTeamView;
+              teamB: TournamentTeamView | null;
+              result: {
+                winnerTeamId: string;
+                scoreText: string;
+                resultMeta: Record<string, string | number | boolean | null> | null;
+              } | null;
+            } => Boolean(entry),
+          ),
+      })),
+    },
+    myFreeMatches,
+  };
+}
+
+async function resolveSourceTeamsForFreeRound(
+  ctx: ReadCtx,
+  categoryId: Id<"tournamentCategories">,
+  sourceRoundId?: Id<"tournamentFreeRounds">,
+): Promise<Id<"tournamentTeams">[]> {
+  if (!sourceRoundId) {
+    const confirmed = await listConfirmedRegistrationsByCategory(ctx, categoryId);
+    return confirmed.map((registration) => registration.teamId);
+  }
+
+  const sourceRound = await ctx.db.get(sourceRoundId);
+  if (!sourceRound || sourceRound.categoryId !== categoryId) {
+    throw new Error("NOT_FOUND");
+  }
+
+  const matches = await listTournamentFreeMatchesByRound(ctx, sourceRoundId);
+  if (matches.length === 0) {
+    throw new Error("VALIDATION_ERROR");
+  }
+  if (matches.some((match) => match.status !== "completed" || !match.winnerTeamId)) {
+    throw new Error("VALIDATION_ERROR");
+  }
+
+  const winners = matches
+    .map((match) => match.winnerTeamId)
+    .filter((winner): winner is Id<"tournamentTeams"> => Boolean(winner));
+  const uniqueWinners = [...new Set(winners)];
+  if (uniqueWinners.length !== winners.length) {
+    throw new Error("VALIDATION_ERROR");
+  }
+  return uniqueWinners;
+}
+
 export const getTournamentBySlug = query({
   args: {
     tournamentSlug: v.string(),
@@ -621,13 +939,16 @@ export const getTournamentBySlug = query({
     const categoryViews = await Promise.all(
       categories.map(async (category) => {
         const counts = await buildCategoryCounts(ctx, category._id);
+        const slotsRemaining = getSlotsRemaining(category.capacity, counts);
         return {
           id: String(category._id),
           slug: category.slug,
           name: category.name,
+          competitionMode: normalizeCompetitionMode(category.competitionMode),
           capacity: category.capacity,
           note: category.note ?? null,
           counts,
+          slotsRemaining,
           confirmedLabel: `${counts.confirmed}/${category.capacity}`,
         };
       }),
@@ -669,6 +990,7 @@ export const getTournamentCategoryBySlug = query({
 
     const category = await requireCategoryBySlugOrThrow(ctx, tournament._id, args.categorySlug);
     const counts = await buildCategoryCounts(ctx, category._id);
+    const slotsRemaining = getSlotsRemaining(category.capacity, counts);
 
     const user = await getOptionalUser(ctx);
     let myRegistration: {
@@ -699,7 +1021,8 @@ export const getTournamentCategoryBySlug = query({
       }
     }
 
-    const stage = await buildCategoryGroupStage(ctx, category._id, myTeamId);
+    const groupStage = await buildCategoryGroupStage(ctx, category._id, myTeamId);
+    const freeStage = await buildCategoryFreeStage(ctx, category._id, myTeamId);
 
     return {
       tournament: {
@@ -722,13 +1045,17 @@ export const getTournamentCategoryBySlug = query({
         id: String(category._id),
         slug: category.slug,
         name: category.name,
+        competitionMode: normalizeCompetitionMode(category.competitionMode),
         capacity: category.capacity,
         note: category.note ?? null,
         counts,
+        slotsRemaining,
       },
       myRegistration,
-      groupStage: stage.groupStage,
-      myGroupMatches: stage.myGroupMatches,
+      groupStage: groupStage.groupStage,
+      myGroupMatches: groupStage.myGroupMatches,
+      freeStage: freeStage.freeStage,
+      myFreeMatches: freeStage.myFreeMatches,
     };
   },
 });
@@ -793,6 +1120,7 @@ export const listAdminTournaments = query({
           categories: categories.map((category) => ({
             slug: category.slug,
             name: category.name,
+            competitionMode: normalizeCompetitionMode(category.competitionMode),
             capacity: category.capacity,
           })),
         };
@@ -835,6 +1163,7 @@ export const getAdminCategoryDashboard = query({
 
         return {
           id: String(registration._id),
+          teamId: String(registration.teamId),
           status: registration.status,
           createdAt: registration.createdAt,
           updatedAt: registration.updatedAt,
@@ -871,6 +1200,7 @@ export const getAdminCategoryDashboard = query({
         id: String(category._id),
         slug: category.slug,
         name: category.name,
+        competitionMode: normalizeCompetitionMode(category.competitionMode),
         capacity: category.capacity,
         note: category.note ?? null,
         counts,
@@ -884,7 +1214,9 @@ export const createTournament = mutation({
   args: {
     clubSlug: v.string(),
     name: v.string(),
-    startsAtLocal: v.string(),
+    startsAtLocal: v.optional(v.string()),
+    startsAtDate: v.optional(v.string()),
+    startsAtTime: v.optional(v.string()),
     timezone: v.optional(v.string()),
     description: v.string(),
     prizes: v.optional(v.string()),
@@ -893,6 +1225,7 @@ export const createTournament = mutation({
     categories: v.array(
       v.object({
         name: v.string(),
+        competitionMode: v.optional(v.union(v.literal("groups"), v.literal("free"))),
         capacity: v.number(),
         note: v.optional(v.string()),
       }),
@@ -912,7 +1245,9 @@ export const createTournament = mutation({
     }
 
     const now = nowIso();
+    const startsAtLocal = resolveTournamentStartsAtLocal(args);
     const tournamentName = ensureNonEmpty(args.name);
+    const timezone = "America/Bogota";
     const tournamentSlug = await makeUniqueSlug(tournamentName, async (slug) => {
       const existing = await getTournamentBySlugFromRepo(ctx, slug);
       return Boolean(existing);
@@ -922,8 +1257,8 @@ export const createTournament = mutation({
       clubId: club._id,
       slug: tournamentSlug,
       name: tournamentName,
-      startsAtUtc: bogotaLocalToUtcIso(args.startsAtLocal),
-      timezone: args.timezone?.trim() || "America/Bogota",
+      startsAtUtc: localDateTimeToUtcIso(startsAtLocal, timezone),
+      timezone,
       description: ensureNonEmpty(args.description),
       prizes: normalizeOptionalText(args.prizes),
       priceInfo: normalizeOptionalText(args.priceInfo),
@@ -949,6 +1284,7 @@ export const createTournament = mutation({
         tournamentId,
         slug: categorySlug,
         name: categoryName,
+        competitionMode: categoryInput.competitionMode ?? "groups",
         capacity: categoryInput.capacity,
         note: normalizeOptionalText(categoryInput.note),
         createdAt: now,
@@ -982,6 +1318,7 @@ export const generateCategoryGroups = mutation({
     await assertClubAdmin(ctx, club._id, actor._id);
 
     const category = await requireCategoryBySlugOrThrow(ctx, tournament._id, args.categorySlug);
+    ensureCategoryMode(category, "groups");
     if (await isCategoryFrozen(ctx, category._id)) {
       throw new Error("VALIDATION_ERROR");
     }
@@ -1043,6 +1380,7 @@ export const moveCategoryTeamToGroup = mutation({
     await assertClubAdmin(ctx, club._id, actor._id);
 
     const category = await requireCategoryBySlugOrThrow(ctx, tournament._id, args.categorySlug);
+    ensureCategoryMode(category, "groups");
     const groups = await listTournamentGroupsByCategory(ctx, category._id);
     if (groups.length === 0) {
       throw new Error("VALIDATION_ERROR");
@@ -1118,6 +1456,7 @@ export const generateCategoryGroupMatches = mutation({
     await assertClubAdmin(ctx, club._id, actor._id);
 
     const category = await requireCategoryBySlugOrThrow(ctx, tournament._id, args.categorySlug);
+    ensureCategoryMode(category, "groups");
     const groups = await listTournamentGroupsByCategory(ctx, category._id);
     if (groups.length === 0) {
       throw new Error("VALIDATION_ERROR");
@@ -1188,6 +1527,7 @@ export const reportCategoryGroupMatchResult = mutation({
     await assertClubAdmin(ctx, club._id, actor._id);
 
     const category = await requireCategoryBySlugOrThrow(ctx, tournament._id, args.categorySlug);
+    ensureCategoryMode(category, "groups");
 
     const match = await ctx.db.get(args.matchId);
     if (!match) {
@@ -1214,6 +1554,148 @@ export const reportCategoryGroupMatchResult = mutation({
       status: "completed",
       winnerTeamId: args.winnerTeamId,
       sets: normalizedSets,
+      reportedAt: now,
+      reportedByUserId: actor._id,
+      updatedAt: now,
+    });
+
+    return {
+      matchId: String(match._id),
+      status: "completed" as const,
+    };
+  },
+});
+
+export const createCategoryFreeRound = mutation({
+  args: {
+    tournamentSlug: v.string(),
+    categorySlug: v.string(),
+    name: v.optional(v.string()),
+    sourceType: v.union(v.literal("manual"), v.literal("random")),
+    sourceRoundId: v.optional(v.id("tournamentFreeRounds")),
+    manualPairings: v.optional(v.array(FREE_ROUND_PAIRING_VALIDATOR)),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireUser(ctx);
+    const tournament = await requireTournamentBySlugOrThrow(args.tournamentSlug, ctx);
+    const club = await ctx.db.get(tournament.clubId);
+    if (!club) {
+      throw new Error("NOT_FOUND");
+    }
+
+    await assertClubAdmin(ctx, club._id, actor._id);
+
+    const category = await requireCategoryBySlugOrThrow(ctx, tournament._id, args.categorySlug);
+    ensureCategoryMode(category, "free");
+
+    const teamIds = await resolveSourceTeamsForFreeRound(ctx, category._id, args.sourceRoundId);
+    if (teamIds.length === 0) {
+      throw new Error("VALIDATION_ERROR");
+    }
+
+    const pairings =
+      args.sourceType === "manual"
+        ? buildManualFreePairings(teamIds, args.manualPairings ?? [])
+        : buildRandomFreePairings(teamIds);
+    if (pairings.length === 0) {
+      throw new Error("VALIDATION_ERROR");
+    }
+
+    const rounds = await listTournamentFreeRoundsByCategory(ctx, category._id);
+    const roundOrder = rounds.length + 1;
+    const now = nowIso();
+    const roundId = await ctx.db.insert("tournamentFreeRounds", {
+      tournamentId: tournament._id,
+      categoryId: category._id,
+      name: normalizeOptionalText(args.name) ?? `Ronda ${roundOrder}`,
+      order: roundOrder,
+      sourceType: args.sourceType as FreeRoundSourceType,
+      sourceRoundId: args.sourceRoundId,
+      createdByUserId: actor._id,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    let byeCount = 0;
+    await Promise.all(
+      pairings.map(async (pairing, index) => {
+        const isBye = pairing.teamBId === null;
+        if (isBye) {
+          byeCount += 1;
+        }
+
+        await ctx.db.insert("tournamentFreeMatches", {
+          tournamentId: tournament._id,
+          categoryId: category._id,
+          roundId,
+          order: index + 1,
+          teamAId: pairing.teamAId,
+          teamBId: pairing.teamBId ?? undefined,
+          status: isBye ? "completed" : "pending",
+          winnerTeamId: isBye ? pairing.teamAId : undefined,
+          scoreText: isBye ? "BYE" : undefined,
+          resultMeta: isBye ? { autoAdvance: true } : undefined,
+          reportedAt: isBye ? now : undefined,
+          reportedByUserId: isBye ? actor._id : undefined,
+          createdByUserId: actor._id,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }),
+    );
+
+    return {
+      roundId: String(roundId),
+      matchesCount: pairings.length,
+      byeCount,
+    };
+  },
+});
+
+export const reportCategoryFreeMatchResult = mutation({
+  args: {
+    tournamentSlug: v.string(),
+    categorySlug: v.string(),
+    matchId: v.id("tournamentFreeMatches"),
+    winnerTeamId: v.id("tournamentTeams"),
+    scoreText: v.string(),
+    resultMeta: v.optional(v.any()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireUser(ctx);
+    const tournament = await requireTournamentBySlugOrThrow(args.tournamentSlug, ctx);
+    const club = await ctx.db.get(tournament.clubId);
+    if (!club) {
+      throw new Error("NOT_FOUND");
+    }
+
+    await assertClubAdmin(ctx, club._id, actor._id);
+
+    const category = await requireCategoryBySlugOrThrow(ctx, tournament._id, args.categorySlug);
+    ensureCategoryMode(category, "free");
+
+    const match = await ctx.db.get(args.matchId);
+    if (!match) {
+      throw new Error("NOT_FOUND");
+    }
+    if (match.tournamentId !== tournament._id || match.categoryId !== category._id) {
+      throw new Error("NOT_FOUND");
+    }
+
+    const scoreText = ensureNonEmpty(args.scoreText);
+    if (args.winnerTeamId !== match.teamAId && args.winnerTeamId !== match.teamBId) {
+      throw new Error("VALIDATION_ERROR");
+    }
+    if (!match.teamBId && args.winnerTeamId !== match.teamAId) {
+      throw new Error("VALIDATION_ERROR");
+    }
+
+    const now = nowIso();
+    await ctx.db.patch(match._id, {
+      status: "completed",
+      winnerTeamId: args.winnerTeamId,
+      scoreText,
+      resultMeta: args.resultMeta === undefined ? match.resultMeta : args.resultMeta,
       reportedAt: now,
       reportedByUserId: actor._id,
       updatedAt: now,

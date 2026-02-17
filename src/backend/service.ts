@@ -10,9 +10,15 @@ import {
   getOpenFeedUtcRange,
   isFutureBogotaLocalDateTime,
   isValidAlias,
+  localDateTimeToUtcIso,
   normalizeAlias,
   utcIsoToBogotaParts,
 } from "@/src/domain/match";
+import {
+  buildManualFreeRoundPairings,
+  buildRandomFreeRoundPairings,
+  type TournamentFreePairing,
+} from "@/src/domain/tournament";
 import {
   type AdminCategoryDashboard,
   type AdminClubMembership,
@@ -33,6 +39,10 @@ import {
   type PublicTournamentDetail,
   type PushSubscriptionPayload,
   type PushSubscriptionState,
+  type TournamentCompetitionMode,
+  type TournamentFreeMatchResultInput,
+  type TournamentFreeRoundCreateRequest,
+  type TournamentFreeRoundSourceType,
   type TournamentGroupMatchView,
   type TournamentGroupStage,
   type TournamentGroupTeamView,
@@ -111,6 +121,7 @@ interface TournamentCategoryRecord {
   tournamentId: string;
   slug: string;
   name: string;
+  competitionMode: TournamentCompetitionMode;
   capacity: number;
   note: string | null;
   createdAt: string;
@@ -166,6 +177,38 @@ interface TournamentMatchRecord {
   status: "pending" | "completed";
   winnerTeamId: string | null;
   sets: TournamentSetScore[] | null;
+  reportedAt: string | null;
+  reportedByUserId: string | null;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface TournamentFreeRoundRecord {
+  id: string;
+  tournamentId: string;
+  categoryId: string;
+  name: string;
+  order: number;
+  sourceType: TournamentFreeRoundSourceType;
+  sourceRoundId: string | null;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface TournamentFreeMatchRecord {
+  id: string;
+  tournamentId: string;
+  categoryId: string;
+  roundId: string;
+  order: number;
+  teamAId: string;
+  teamBId: string | null;
+  status: "pending" | "completed";
+  winnerTeamId: string | null;
+  scoreText: string | null;
+  resultMeta: Record<string, string | number | boolean | null> | null;
   reportedAt: string | null;
   reportedByUserId: string | null;
   createdByUserId: string;
@@ -237,6 +280,11 @@ export class PadelService implements BackendPadelService {
   private tournamentMatches = new Map<string, TournamentMatchRecord>();
   private matchesByCategory = new Map<string, Map<string, TournamentMatchRecord>>();
   private matchesByGroup = new Map<string, Map<string, TournamentMatchRecord>>();
+  private tournamentFreeRounds = new Map<string, TournamentFreeRoundRecord>();
+  private freeRoundsByCategory = new Map<string, Map<string, TournamentFreeRoundRecord>>();
+  private tournamentFreeMatches = new Map<string, TournamentFreeMatchRecord>();
+  private freeMatchesByCategory = new Map<string, Map<string, TournamentFreeMatchRecord>>();
+  private freeMatchesByRound = new Map<string, Map<string, TournamentFreeMatchRecord>>();
   private locksByMatchId = new Map<string, AsyncLock>();
   private logs: EventLogRecord[] = [];
   private events = new EventEmitter();
@@ -270,6 +318,11 @@ export class PadelService implements BackendPadelService {
     this.tournamentMatches.clear();
     this.matchesByCategory.clear();
     this.matchesByGroup.clear();
+    this.tournamentFreeRounds.clear();
+    this.freeRoundsByCategory.clear();
+    this.tournamentFreeMatches.clear();
+    this.freeMatchesByCategory.clear();
+    this.freeMatchesByRound.clear();
     this.locksByMatchId.clear();
     this.logs = [];
   }
@@ -787,13 +840,16 @@ export class PadelService implements BackendPadelService {
       },
       categories: categories.map((category) => {
         const counts = this.getCategoryCounts(category.id);
+        const slotsRemaining = this.getSlotsRemaining(category.capacity, counts);
         return {
           id: category.id,
           slug: category.slug,
           name: category.name,
+          competitionMode: category.competitionMode,
           capacity: category.capacity,
           note: category.note,
           counts,
+          slotsRemaining,
           confirmedLabel: `${counts.confirmed}/${category.capacity}`,
         };
       }),
@@ -809,6 +865,7 @@ export class PadelService implements BackendPadelService {
     const club = this.mustGetClub(tournament.clubId);
     const category = this.mustGetCategoryBySlug(tournament.id, categorySlug);
     const counts = this.getCategoryCounts(category.id);
+    const slotsRemaining = this.getSlotsRemaining(category.capacity, counts);
 
     let myRegistration: PublicTournamentCategoryDetail["myRegistration"] = null;
     let myTeamId: string | null = null;
@@ -835,6 +892,8 @@ export class PadelService implements BackendPadelService {
 
     const groupStage = this.buildCategoryGroupStage(category.id);
     const myGroupMatches = myTeamId ? this.filterMyGroupMatches(category.id, myTeamId) : [];
+    const freeStage = this.buildCategoryFreeStage(category.id);
+    const myFreeMatches = myTeamId ? this.filterMyFreeMatches(category.id, myTeamId) : [];
 
     return {
       tournament: {
@@ -857,13 +916,17 @@ export class PadelService implements BackendPadelService {
         id: category.id,
         slug: category.slug,
         name: category.name,
+        competitionMode: category.competitionMode,
         capacity: category.capacity,
         note: category.note,
         counts,
+        slotsRemaining,
       },
       myRegistration,
       groupStage,
       myGroupMatches,
+      freeStage,
+      myFreeMatches,
     };
   }
 
@@ -913,6 +976,7 @@ export class PadelService implements BackendPadelService {
           categories: categories.map((category) => ({
             slug: category.slug,
             name: category.name,
+            competitionMode: category.competitionMode,
             capacity: category.capacity,
           })),
         };
@@ -945,6 +1009,7 @@ export class PadelService implements BackendPadelService {
 
       const row: AdminTournamentRegistrationItem = {
         id: registration.id,
+        teamId: registration.teamId,
         status: registration.status,
         createdAt: registration.createdAt,
         updatedAt: registration.updatedAt,
@@ -974,6 +1039,7 @@ export class PadelService implements BackendPadelService {
         id: category.id,
         slug: category.slug,
         name: category.name,
+        competitionMode: category.competitionMode,
         capacity: category.capacity,
         note: category.note,
         counts,
@@ -1000,6 +1066,8 @@ export class PadelService implements BackendPadelService {
     }
 
     const now = nowIso();
+    const timezone = "America/Bogota";
+    const startsAtLocal = this.resolveTournamentStartsAtLocal(input);
     const tournamentSlug = this.makeUniqueSlug(input.name, (slug) => this.tournamentBySlug.has(slug));
     const tournamentId = randomUUID();
     const tournament: TournamentRecord = {
@@ -1007,8 +1075,8 @@ export class PadelService implements BackendPadelService {
       clubId: club.id,
       slug: tournamentSlug,
       name: input.name.trim(),
-      startsAtUtc: bogotaLocalToUtcIso(input.startsAtLocal),
-      timezone: input.timezone?.trim() || APP_TIMEZONE,
+      startsAtUtc: localDateTimeToUtcIso(startsAtLocal, timezone),
+      timezone,
       description: input.description.trim(),
       prizes: input.prizes?.trim() || null,
       priceInfo: input.priceInfo?.trim() || null,
@@ -1038,6 +1106,7 @@ export class PadelService implements BackendPadelService {
         tournamentId,
         slug: categorySlug,
         name: item.name.trim(),
+        competitionMode: item.competitionMode ?? "groups",
         capacity: item.capacity,
         note: item.note?.trim() || null,
         createdAt: now,
@@ -1050,6 +1119,8 @@ export class PadelService implements BackendPadelService {
       this.groupsByCategory.set(categoryId, new Map());
       this.groupByCategoryName.set(categoryId, new Map());
       this.matchesByCategory.set(categoryId, new Map());
+      this.freeRoundsByCategory.set(categoryId, new Map());
+      this.freeMatchesByCategory.set(categoryId, new Map());
       categorySlugs.push(categorySlug);
     }
 
@@ -1071,6 +1142,9 @@ export class PadelService implements BackendPadelService {
     this.assertClubAdmin(actor.id, club.id);
 
     const category = this.mustGetCategoryBySlug(tournament.id, categorySlug);
+    if (category.competitionMode !== "groups") {
+      throw new DomainError("VALIDATION_ERROR", "La categoría está configurada en modo libre.");
+    }
     if (this.hasGeneratedGroups(category.id)) {
       throw new DomainError("VALIDATION_ERROR", "Los grupos ya fueron generados.");
     }
@@ -1143,6 +1217,9 @@ export class PadelService implements BackendPadelService {
     this.assertClubAdmin(actor.id, club.id);
 
     const category = this.mustGetCategoryBySlug(tournament.id, categorySlug);
+    if (category.competitionMode !== "groups") {
+      throw new DomainError("VALIDATION_ERROR", "La categoría está configurada en modo libre.");
+    }
     const groups = this.listGroupsForCategory(category.id);
     if (groups.length === 0) {
       throw new DomainError("VALIDATION_ERROR", "Primero debes generar grupos.");
@@ -1213,6 +1290,9 @@ export class PadelService implements BackendPadelService {
     this.assertClubAdmin(actor.id, club.id);
 
     const category = this.mustGetCategoryBySlug(tournament.id, categorySlug);
+    if (category.competitionMode !== "groups") {
+      throw new DomainError("VALIDATION_ERROR", "La categoría está configurada en modo libre.");
+    }
     const groups = this.listGroupsForCategory(category.id);
     if (groups.length === 0) {
       throw new DomainError("VALIDATION_ERROR", "Primero debes generar grupos.");
@@ -1282,6 +1362,9 @@ export class PadelService implements BackendPadelService {
     this.assertClubAdmin(actor.id, club.id);
 
     const category = this.mustGetCategoryBySlug(tournament.id, categorySlug);
+    if (category.competitionMode !== "groups") {
+      throw new DomainError("VALIDATION_ERROR", "La categoría está configurada en modo libre.");
+    }
     const match = this.tournamentMatches.get(matchId);
     if (!match) {
       throw new DomainError("NOT_FOUND", "Partido no encontrado.");
@@ -1312,6 +1395,169 @@ export class PadelService implements BackendPadelService {
     this.tournamentMatches.set(match.id, next);
     this.mustGetMatchesByCategory(category.id).set(match.id, next);
     this.mustGetMatchesByGroup(match.groupId).set(match.id, next);
+
+    return {
+      matchId: match.id,
+      status: "completed",
+    };
+  }
+
+  async createTournamentFreeRound(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+    payload: TournamentFreeRoundCreateRequest,
+  ): Promise<{ roundId: string; matchesCount: number; byeCount: number }> {
+    const actor = this.getUserByToken(token);
+    const tournament = this.mustGetTournamentBySlug(tournamentSlug);
+    const club = this.mustGetClub(tournament.clubId);
+    this.assertClubAdmin(actor.id, club.id);
+
+    const category = this.mustGetCategoryBySlug(tournament.id, categorySlug);
+    if (category.competitionMode !== "free") {
+      throw new DomainError("VALIDATION_ERROR", "La categoría está configurada en modo grupos.");
+    }
+
+    const sourceType = payload.sourceType;
+    if (sourceType !== "manual" && sourceType !== "random") {
+      throw new DomainError("VALIDATION_ERROR", "Tipo de ronda libre inválido.");
+    }
+
+    const teamIds =
+      payload.sourceRoundId !== undefined
+        ? this.resolveWinnerTeamIdsForFreeRound(category.id, payload.sourceRoundId)
+        : this.listRegistrationsForCategory(category.id)
+            .filter((registration) => registration.status === "confirmed")
+            .map((registration) => registration.teamId);
+
+    if (teamIds.length === 0) {
+      throw new DomainError("VALIDATION_ERROR", "No hay equipos disponibles para armar la ronda libre.");
+    }
+
+    const pairings: TournamentFreePairing[] =
+      sourceType === "manual"
+        ? buildManualFreeRoundPairings(teamIds, payload.manualPairings ?? [])
+        : buildRandomFreeRoundPairings(teamIds);
+
+    if (pairings.length === 0) {
+      throw new DomainError("VALIDATION_ERROR", "No se pudieron generar cruces para la ronda libre.");
+    }
+
+    const now = nowIso();
+    const rounds = this.listFreeRoundsForCategory(category.id);
+    const roundOrder = rounds.length + 1;
+    const roundId = randomUUID();
+    const roundName = payload.name?.trim() || `Ronda ${roundOrder}`;
+    const round: TournamentFreeRoundRecord = {
+      id: roundId,
+      tournamentId: tournament.id,
+      categoryId: category.id,
+      name: roundName,
+      order: roundOrder,
+      sourceType,
+      sourceRoundId: payload.sourceRoundId ?? null,
+      createdByUserId: actor.id,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.tournamentFreeRounds.set(roundId, round);
+    this.mustGetFreeRoundsByCategory(category.id).set(roundId, round);
+
+    const matchesByCategory = this.mustGetFreeMatchesByCategory(category.id);
+    const matchesByRound = this.mustGetFreeMatchesByRound(roundId);
+    let byeCount = 0;
+
+    pairings.forEach((pairing, index) => {
+      const isBye = pairing.teamBId === null;
+      if (isBye) {
+        byeCount += 1;
+      }
+
+      const matchId = randomUUID();
+      const match: TournamentFreeMatchRecord = {
+        id: matchId,
+        tournamentId: tournament.id,
+        categoryId: category.id,
+        roundId,
+        order: index + 1,
+        teamAId: pairing.teamAId,
+        teamBId: pairing.teamBId,
+        status: isBye ? "completed" : "pending",
+        winnerTeamId: isBye ? pairing.teamAId : null,
+        scoreText: isBye ? "BYE" : null,
+        resultMeta: isBye ? { autoAdvance: true } : null,
+        reportedAt: isBye ? now : null,
+        reportedByUserId: isBye ? actor.id : null,
+        createdByUserId: actor.id,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      this.tournamentFreeMatches.set(matchId, match);
+      matchesByCategory.set(matchId, match);
+      matchesByRound.set(matchId, match);
+    });
+
+    return {
+      roundId,
+      matchesCount: pairings.length,
+      byeCount,
+    };
+  }
+
+  async reportTournamentFreeMatchResult(
+    token: string,
+    tournamentSlug: string,
+    categorySlug: string,
+    matchId: string,
+    payload: TournamentFreeMatchResultInput,
+  ): Promise<{ matchId: string; status: "completed" }> {
+    const actor = this.getUserByToken(token);
+    const tournament = this.mustGetTournamentBySlug(tournamentSlug);
+    const club = this.mustGetClub(tournament.clubId);
+    this.assertClubAdmin(actor.id, club.id);
+
+    const category = this.mustGetCategoryBySlug(tournament.id, categorySlug);
+    if (category.competitionMode !== "free") {
+      throw new DomainError("VALIDATION_ERROR", "La categoría está configurada en modo grupos.");
+    }
+
+    const match = this.tournamentFreeMatches.get(matchId);
+    if (!match) {
+      throw new DomainError("NOT_FOUND", "Partido no encontrado.");
+    }
+    if (match.tournamentId !== tournament.id || match.categoryId !== category.id) {
+      throw new DomainError("NOT_FOUND", "Partido no encontrado.");
+    }
+
+    const scoreText = payload.scoreText.trim();
+    if (!scoreText) {
+      throw new DomainError("VALIDATION_ERROR", "Debes informar un resultado.");
+    }
+
+    if (payload.winnerTeamId !== match.teamAId && payload.winnerTeamId !== match.teamBId) {
+      throw new DomainError("VALIDATION_ERROR", "El ganador no coincide con los equipos del cruce.");
+    }
+    if (match.teamBId === null && payload.winnerTeamId !== match.teamAId) {
+      throw new DomainError("VALIDATION_ERROR", "Un cruce BYE solo puede avanzar al equipo A.");
+    }
+
+    const now = nowIso();
+    const next: TournamentFreeMatchRecord = {
+      ...match,
+      status: "completed",
+      winnerTeamId: payload.winnerTeamId,
+      scoreText,
+      resultMeta: payload.resultMeta ?? null,
+      reportedAt: now,
+      reportedByUserId: actor.id,
+      updatedAt: now,
+    };
+
+    this.tournamentFreeMatches.set(match.id, next);
+    this.mustGetFreeMatchesByCategory(category.id).set(match.id, next);
+    this.mustGetFreeMatchesByRound(match.roundId).set(match.id, next);
 
     return {
       matchId: match.id,
@@ -1871,13 +2117,47 @@ export class PadelService implements BackendPadelService {
     };
   }
 
+  private getSlotsRemaining(
+    capacity: number,
+    counts: {
+      pending: number;
+      confirmed: number;
+    },
+  ): number {
+    return Math.max(capacity - (counts.pending + counts.confirmed), 0);
+  }
+
+  private resolveTournamentStartsAtLocal(input: CreateTournamentInput): string {
+    const startsAtLocal = input.startsAtLocal?.trim();
+    if (startsAtLocal) {
+      return startsAtLocal;
+    }
+
+    const startsAtDate = input.startsAtDate?.trim();
+    if (!startsAtDate || !/^\d{4}-\d{2}-\d{2}$/.test(startsAtDate)) {
+      throw new DomainError("VALIDATION_ERROR", "Debes seleccionar una fecha válida para el torneo.");
+    }
+
+    const startsAtTime = input.startsAtTime?.trim();
+    if (startsAtTime && !/^\d{2}:\d{2}$/.test(startsAtTime)) {
+      throw new DomainError("VALIDATION_ERROR", "La hora debe tener formato HH:mm.");
+    }
+
+    const normalizedTime = startsAtTime || "00:00";
+    return `${startsAtDate}T${normalizedTime}`;
+  }
+
   private assertCategoryNotFrozen(categoryId: string) {
-    if (this.hasGeneratedGroups(categoryId)) {
+    if (this.hasCategoryCompetitionStarted(categoryId)) {
       throw new DomainError(
         "TOURNAMENT_CATEGORY_FROZEN",
         "La categoría ya está cerrada para cambios de inscripción.",
       );
     }
+  }
+
+  private hasCategoryCompetitionStarted(categoryId: string): boolean {
+    return this.hasGeneratedGroups(categoryId) || this.listFreeRoundsForCategory(categoryId).length > 0;
   }
 
   private hasGeneratedGroups(categoryId: string): boolean {
@@ -1947,6 +2227,93 @@ export class PadelService implements BackendPadelService {
     return matches;
   }
 
+  private listFreeRoundsForCategory(categoryId: string): TournamentFreeRoundRecord[] {
+    const rounds = this.freeRoundsByCategory.get(categoryId);
+    if (!rounds) {
+      return [];
+    }
+    return [...rounds.values()].sort((a, b) => a.order - b.order);
+  }
+
+  private mustGetFreeRoundsByCategory(categoryId: string): Map<string, TournamentFreeRoundRecord> {
+    let rounds = this.freeRoundsByCategory.get(categoryId);
+    if (!rounds) {
+      rounds = new Map();
+      this.freeRoundsByCategory.set(categoryId, rounds);
+    }
+    return rounds;
+  }
+
+  private listFreeMatchesForCategory(categoryId: string): TournamentFreeMatchRecord[] {
+    const matches = this.freeMatchesByCategory.get(categoryId);
+    if (!matches) {
+      return [];
+    }
+
+    const roundOrderById = new Map(
+      this.listFreeRoundsForCategory(categoryId).map((round) => [round.id, round.order] as const),
+    );
+
+    return [...matches.values()].sort((a, b) => {
+      const roundOrderA = roundOrderById.get(a.roundId) ?? Number.MAX_SAFE_INTEGER;
+      const roundOrderB = roundOrderById.get(b.roundId) ?? Number.MAX_SAFE_INTEGER;
+      if (roundOrderA !== roundOrderB) {
+        return roundOrderA - roundOrderB;
+      }
+      return a.order - b.order;
+    });
+  }
+
+  private mustGetFreeMatchesByCategory(categoryId: string): Map<string, TournamentFreeMatchRecord> {
+    let matches = this.freeMatchesByCategory.get(categoryId);
+    if (!matches) {
+      matches = new Map();
+      this.freeMatchesByCategory.set(categoryId, matches);
+    }
+    return matches;
+  }
+
+  private listFreeMatchesForRound(roundId: string): TournamentFreeMatchRecord[] {
+    const matches = this.freeMatchesByRound.get(roundId);
+    if (!matches) {
+      return [];
+    }
+    return [...matches.values()].sort((a, b) => a.order - b.order);
+  }
+
+  private mustGetFreeMatchesByRound(roundId: string): Map<string, TournamentFreeMatchRecord> {
+    let matches = this.freeMatchesByRound.get(roundId);
+    if (!matches) {
+      matches = new Map();
+      this.freeMatchesByRound.set(roundId, matches);
+    }
+    return matches;
+  }
+
+  private resolveWinnerTeamIdsForFreeRound(categoryId: string, sourceRoundId: string): string[] {
+    const round = this.tournamentFreeRounds.get(sourceRoundId);
+    if (!round || round.categoryId !== categoryId) {
+      throw new DomainError("NOT_FOUND", "Ronda fuente no encontrada.");
+    }
+
+    const matches = this.listFreeMatchesForRound(sourceRoundId);
+    if (matches.length === 0) {
+      throw new DomainError("VALIDATION_ERROR", "La ronda fuente no tiene cruces.");
+    }
+
+    if (matches.some((match) => match.status !== "completed" || !match.winnerTeamId)) {
+      throw new DomainError("VALIDATION_ERROR", "Todos los cruces de la ronda fuente deben estar resueltos.");
+    }
+
+    const winners = matches.map((match) => match.winnerTeamId).filter((winner): winner is string => Boolean(winner));
+    const uniqueWinners = [...new Set(winners)];
+    if (uniqueWinners.length !== winners.length) {
+      throw new DomainError("VALIDATION_ERROR", "Los ganadores de la ronda fuente son inválidos.");
+    }
+
+    return uniqueWinners;
+  }
+
   private toGroupTeamView(teamId: string): TournamentGroupTeamView | null {
     const team = this.teams.get(teamId);
     if (!team) {
@@ -1984,6 +2351,65 @@ export class PadelService implements BackendPadelService {
       teamA,
       teamB,
       result,
+    };
+  }
+
+  private toFreeMatchView(
+    match: TournamentFreeMatchRecord,
+  ): NonNullable<PublicTournamentCategoryDetail["freeStage"]>["rounds"][number]["matches"][number] | null {
+    const teamA = this.toGroupTeamView(match.teamAId);
+    const teamB = match.teamBId ? this.toGroupTeamView(match.teamBId) : null;
+    if (!teamA) {
+      return null;
+    }
+    if (match.teamBId && !teamB) {
+      return null;
+    }
+
+    const result =
+      match.status === "completed" && match.winnerTeamId && match.scoreText
+        ? {
+            winnerTeamId: match.winnerTeamId,
+            scoreText: match.scoreText,
+            resultMeta: match.resultMeta,
+          }
+        : null;
+
+    return {
+      id: match.id,
+      order: match.order,
+      status: match.status,
+      teamA,
+      teamB,
+      result,
+    };
+  }
+
+  private buildCategoryFreeStage(categoryId: string): PublicTournamentCategoryDetail["freeStage"] {
+    const rounds = this.listFreeRoundsForCategory(categoryId);
+    if (rounds.length === 0) {
+      return null;
+    }
+
+    const matches = this.listFreeMatchesForCategory(categoryId);
+    return {
+      generatedAt: rounds[0]?.createdAt ?? nowIso(),
+      rounds: rounds.map((round) => ({
+        id: round.id,
+        name: round.name,
+        order: round.order,
+        sourceType: round.sourceType,
+        sourceRoundId: round.sourceRoundId,
+        matches: matches
+          .filter((match) => match.roundId === round.id)
+          .map((match) => this.toFreeMatchView(match))
+          .filter(
+            (
+              match,
+            ): match is NonNullable<PublicTournamentCategoryDetail["freeStage"]>["rounds"][number]["matches"][number] =>
+              Boolean(match),
+          ),
+      })),
     };
   }
 
@@ -2220,6 +2646,27 @@ export class PadelService implements BackendPadelService {
       .filter((match): match is PublicTournamentCategoryDetail["myGroupMatches"][number] => Boolean(match));
   }
 
+  private filterMyFreeMatches(
+    categoryId: string,
+    myTeamId: string,
+  ): PublicTournamentCategoryDetail["myFreeMatches"] {
+    const roundNameById = new Map(this.listFreeRoundsForCategory(categoryId).map((round) => [round.id, round.name] as const));
+
+    return this.listFreeMatchesForCategory(categoryId)
+      .filter((match) => match.teamAId === myTeamId || match.teamBId === myTeamId)
+      .map((match) => {
+        const view = this.toFreeMatchView(match);
+        if (!view) {
+          return null;
+        }
+        return {
+          ...view,
+          roundName: roundNameById.get(match.roundId) ?? "",
+        };
+      })
+      .filter((match): match is PublicTournamentCategoryDetail["myFreeMatches"][number] => Boolean(match));
+  }
+
   private shuffle<T>(values: T[]): T[] {
     for (let index = values.length - 1; index > 0; index -= 1) {
       const randomIndex = Math.floor(Math.random() * (index + 1));
@@ -2254,8 +2701,8 @@ export class PadelService implements BackendPadelService {
       throw new DomainError("VALIDATION_ERROR", "El ganador no coincide con los equipos del partido.");
     }
 
-    if (input.sets.length < 2 || input.sets.length > 3) {
-      throw new DomainError("VALIDATION_ERROR", "Debes enviar 2 o 3 sets.");
+    if (input.sets.length < 1 || input.sets.length > 5) {
+      throw new DomainError("VALIDATION_ERROR", "Debes enviar entre 1 y 5 sets.");
     }
 
     let teamASetsWon = 0;
@@ -2282,8 +2729,9 @@ export class PadelService implements BackendPadelService {
     });
 
     const winnerSetsWon = input.winnerTeamId === input.teamAId ? teamASetsWon : teamBSetsWon;
-    if (winnerSetsWon !== 2) {
-      throw new DomainError("VALIDATION_ERROR", "El equipo ganador debe ganar exactamente 2 sets.");
+    const loserSetsWon = input.winnerTeamId === input.teamAId ? teamBSetsWon : teamASetsWon;
+    if (winnerSetsWon === 0 || winnerSetsWon <= loserSetsWon) {
+      throw new DomainError("VALIDATION_ERROR", "El ganador debe tener más sets ganados que su rival.");
     }
 
     return normalizedSets;

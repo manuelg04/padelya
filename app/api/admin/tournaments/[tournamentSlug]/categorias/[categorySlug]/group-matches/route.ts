@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 
 import { resolveAuthToken, responseError, responseOk } from "@/src/backend/http";
 import { padelService } from "@/src/backend/padel-service";
+import { DomainError } from "@/src/domain/errors";
 
 export async function POST(
   request: NextRequest,
@@ -10,7 +11,7 @@ export async function POST(
   try {
     const token = await resolveAuthToken(request);
     if (!token) {
-      throw new Error("No autorizado");
+      throw new DomainError("UNAUTHORIZED", "No autorizado.");
     }
 
     const { tournamentSlug, categorySlug } = await params;
