@@ -300,6 +300,31 @@ export default function MatchDetailPage() {
 
   const dateTime = useMemo(() => (match ? utcIsoToBogotaParts(match.startsAtUtc) : null), [match]);
 
+  const viewerUserId = user?.id ?? null;
+  const isParticipantByViewer = Boolean(
+    match && viewerUserId && match.participants.some((participant) => participant.userId === viewerUserId),
+  );
+  const isOrganizerByViewer = Boolean(match && viewerUserId && match.organizerUserId === viewerUserId);
+  const isOrganizer = Boolean(match && (match.isOrganizer || isOrganizerByViewer));
+  const canJoin = Boolean(
+    match &&
+      (match.canJoin ||
+        (Boolean(token) &&
+          !isParticipantByViewer &&
+          !isOrganizerByViewer &&
+          !match.isCanceled &&
+          match.status === "abierta")),
+  );
+  const canLeave = Boolean(
+    match &&
+      (match.canLeave ||
+        (Boolean(token) &&
+          isParticipantByViewer &&
+          !isOrganizerByViewer &&
+          !match.isCanceled &&
+          match.status !== "no_se_armo")),
+  );
+
   const emptySlots = match ? MAX_PLAYERS - match.participants.length : 0;
   const hasAvailableSpot = Boolean(
     match && !match.isCanceled && match.status === "abierta" && match.participants.length < MAX_PLAYERS,
@@ -564,7 +589,7 @@ export default function MatchDetailPage() {
                 </Button>
               ) : null}
 
-              {match.canJoin ? (
+              {canJoin ? (
                 <Button className="w-full" size="lg" onClick={handleJoin} disabled={isMutating} data-testid="join-btn">
                   {isMutating ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -579,7 +604,7 @@ export default function MatchDetailPage() {
                 </Button>
               ) : null}
 
-              {match.canLeave ? (
+              {canLeave ? (
                 <Button className="w-full" variant="outline" size="lg" onClick={handleLeave} disabled={isMutating} data-testid="leave-btn">
                   {isMutating ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -590,7 +615,7 @@ export default function MatchDetailPage() {
                 </Button>
               ) : null}
 
-              {token && !match.isOrganizer && !match.canJoin && !match.canLeave && !match.isCanceled && match.status === "cerrada" ? (
+              {token && !isOrganizer && !canJoin && !canLeave && !match.isCanceled && match.status === "cerrada" ? (
                 <>
                   {!match.isWatchingReleaseSpot ? (
                     <Button
@@ -665,7 +690,7 @@ export default function MatchDetailPage() {
             </div>
 
             {/* Organizer actions */}
-            {match.isOrganizer && !match.isCanceled ? (
+            {isOrganizer && !match.isCanceled ? (
               <>
                 <Separator />
                 {match.status === "no_se_armo" ? (
