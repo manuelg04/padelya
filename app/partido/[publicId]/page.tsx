@@ -119,8 +119,11 @@ export default function MatchDetailPage() {
   }, [publicId, token]);
 
   useEffect(() => {
+    if (loading) {
+      return;
+    }
     void refresh();
-  }, [refresh]);
+  }, [refresh, loading]);
 
   useEffect(() => {
     return () => {
