@@ -51,6 +51,8 @@ import {
   type ApiError,
 } from "@/src/lib/api/client";
 import { getAvatarInitials } from "@/src/lib/avatar";
+import { USE_MOCK_BACKEND } from "@/src/lib/env";
+import { firebaseAuth } from "@/src/lib/firebase/client";
 import { normalizePublicId } from "@/src/lib/public-id";
 import { useReturnTrigger } from "@/src/lib/use-return-trigger";
 import { cn, toErrorMessage } from "@/src/lib/utils";
@@ -93,7 +95,12 @@ export default function MatchDetailPage() {
 
     try {
       setIsLoading(true);
-      const next = await getMatch(publicId, token ?? undefined);
+      const activeToken =
+        token ??
+        (USE_MOCK_BACKEND || !firebaseAuth?.currentUser
+          ? null
+          : await firebaseAuth.currentUser.getIdToken().catch(() => null));
+      const next = await getMatch(publicId, activeToken ?? undefined);
       setMatch(next);
       const nextSnapshot = toMatchReentrySnapshot(next);
       matchSnapshotRef.current = nextSnapshot;
@@ -187,25 +194,43 @@ export default function MatchDetailPage() {
     return query ? `${pathname}?${query}` : pathname;
   }, [pathname, searchParams]);
 
-  async function guardAuth(): Promise<boolean> {
-    if (!token) {
+  const resolveActiveToken = useCallback(async (): Promise<string | null> => {
+    if (token) {
+      return token;
+    }
+
+    if (USE_MOCK_BACKEND || !firebaseAuth?.currentUser) {
+      return null;
+    }
+
+    try {
+      return await firebaseAuth.currentUser.getIdToken();
+    } catch {
+      return null;
+    }
+  }, [token]);
+
+  async function guardAuth(): Promise<string | null> {
+    const activeToken = await resolveActiveToken();
+    if (!activeToken) {
       router.push(`/login?redirect=${encodeURIComponent(pathWithQuery)}`);
-      return false;
+      return null;
     }
     if (!loading && user && !user.alias) {
       router.push(`/perfil?redirect=${encodeURIComponent(pathWithQuery)}`);
-      return false;
+      return null;
     }
-    return true;
+    return activeToken;
   }
 
   async function handleJoin() {
-    if (!(await guardAuth()) || !token) {
+    const activeToken = await guardAuth();
+    if (!activeToken) {
       return;
     }
     try {
       setIsMutating(true);
-      const next = await joinMatch(publicId, token);
+      const next = await joinMatch(publicId, activeToken);
       setMatch(next);
       matchSnapshotRef.current = toMatchReentrySnapshot(next);
       setFeedback("Te uniste al partido.");
@@ -222,12 +247,13 @@ export default function MatchDetailPage() {
   }
 
   async function handleLeave() {
-    if (!(await guardAuth()) || !token) {
+    const activeToken = await guardAuth();
+    if (!activeToken) {
       return;
     }
     try {
       setIsMutating(true);
-      const next = await leaveMatch(publicId, token);
+      const next = await leaveMatch(publicId, activeToken);
       setMatch(next);
       matchSnapshotRef.current = toMatchReentrySnapshot(next);
       setFeedback("Saliste del partido.");
@@ -251,12 +277,13 @@ export default function MatchDetailPage() {
   }
 
   async function handleConfirmCancel() {
-    if (!(await guardAuth()) || !token) {
+    const activeToken = await guardAuth();
+    if (!activeToken) {
       return;
     }
     try {
       setIsMutating(true);
-      const next = await cancelMatch(publicId, token);
+      const next = await cancelMatch(publicId, activeToken);
       setMatch(next);
       matchSnapshotRef.current = toMatchReentrySnapshot(next);
       setIsCancelConfirmOpen(false);
@@ -271,7 +298,8 @@ export default function MatchDetailPage() {
 
   async function handleCopySummary() {
     try {
-      const summary = await getMatchSummary(publicId, token ?? undefined);
+      const activeToken = await resolveActiveToken();
+      const summary = await getMatchSummary(publicId, activeToken ?? undefined);
       await navigator.clipboard.writeText(summary);
       setFeedback("Resumen copiado para WhatsApp.");
       setError(null);
@@ -309,7 +337,7 @@ export default function MatchDetailPage() {
   const canJoin = Boolean(
     match &&
       (match.canJoin ||
-        (Boolean(token) &&
+        (Boolean(viewerUserId) &&
           !isParticipantByViewer &&
           !isOrganizerByViewer &&
           !match.isCanceled &&
@@ -318,7 +346,7 @@ export default function MatchDetailPage() {
   const canLeave = Boolean(
     match &&
       (match.canLeave ||
-        (Boolean(token) &&
+        (Boolean(viewerUserId) &&
           isParticipantByViewer &&
           !isOrganizerByViewer &&
           !match.isCanceled &&
@@ -342,13 +370,14 @@ export default function MatchDetailPage() {
         : null;
 
   async function handleRetry() {
-    if (!(await guardAuth()) || !token || !match) {
+    const activeToken = await guardAuth();
+    if (!activeToken || !match) {
       return;
     }
 
     try {
       setIsMutating(true);
-      const retryMatch = await createMatch(token, {
+      const retryMatch = await createMatch(activeToken, {
         club: match.club,
         startsAtLocal: suggestRetryStartsAtLocal(match.startsAtUtc),
         category: match.category,
@@ -365,12 +394,13 @@ export default function MatchDetailPage() {
   }
 
   async function handleFollowWatch() {
-    if (!(await guardAuth()) || !token) {
+    const activeToken = await guardAuth();
+    if (!activeToken) {
       return;
     }
     try {
       setIsMutating(true);
-      const next = await followMatchWatch(publicId, token);
+      const next = await followMatchWatch(publicId, activeToken);
       setMatch(next);
       matchSnapshotRef.current = toMatchReentrySnapshot(next);
       setFeedback("Te avisaremos si se libera un cupo.");
@@ -383,12 +413,13 @@ export default function MatchDetailPage() {
   }
 
   async function handleUnfollowWatch() {
-    if (!(await guardAuth()) || !token) {
+    const activeToken = await guardAuth();
+    if (!activeToken) {
       return;
     }
     try {
       setIsMutating(true);
-      const next = await unfollowMatchWatch(publicId, token);
+      const next = await unfollowMatchWatch(publicId, activeToken);
       setMatch(next);
       matchSnapshotRef.current = toMatchReentrySnapshot(next);
       setFeedback("Dejaste de seguir este partido.");
@@ -615,7 +646,7 @@ export default function MatchDetailPage() {
                 </Button>
               ) : null}
 
-              {token && !isOrganizer && !canJoin && !canLeave && !match.isCanceled && match.status === "cerrada" ? (
+              {viewerUserId && !isOrganizer && !canJoin && !canLeave && !match.isCanceled && match.status === "cerrada" ? (
                 <>
                   {!match.isWatchingReleaseSpot ? (
                     <Button
@@ -661,7 +692,7 @@ export default function MatchDetailPage() {
                 </>
               ) : null}
 
-              {!token && !match.isCanceled && match.status !== "no_se_armo" ? (
+              {!viewerUserId && !match.isCanceled && match.status !== "no_se_armo" ? (
                 <Button className="w-full" size="lg" asChild>
                   <Link href={`/login?redirect=${encodeURIComponent(pathWithQuery)}`}>
                     <LogIn className="h-4 w-4" />
