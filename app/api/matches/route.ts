@@ -30,9 +30,15 @@ export async function GET(request: NextRequest) {
     const mine = request.nextUrl.searchParams.get("mine") === "1";
 
     if (open) {
+      // Open feed is public. If auth token is invalid, fall back to anonymous view.
+      const actorToken = await resolveAuthToken(request).catch(() => null);
       const modality = parseOpenModality(request.nextUrl.searchParams.get("modality"));
       const window = parseOpenWindow(request.nextUrl.searchParams.get("window"));
-      const matches = await padelService.listOpenFeed({ modality, window });
+      const matches = await padelService.listOpenFeed({
+        modality,
+        window,
+        actorToken: actorToken ?? undefined,
+      });
       return responseOk({ matches });
     }
 

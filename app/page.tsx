@@ -199,6 +199,7 @@ export default function HomePage() {
         }
 
         const openMatches = await listMatches({
+          token: token ?? undefined,
           open: true,
           modality: feedModality === "all" ? undefined : feedModality,
           window: feedWindow,

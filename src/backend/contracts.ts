@@ -39,7 +39,12 @@ export interface BackendPadelService {
   createMatch(token: string, input: CreateMatchInput): MaybePromise<MatchView>;
   listHome(actorToken?: string): MaybePromise<MatchView[]>;
   listMine(token: string): MaybePromise<MatchView[]>;
-  listOpenFeed(filters: { modality?: Modality; window: OpenFeedWindow; now?: Date }): MaybePromise<MatchView[]>;
+  listOpenFeed(filters: {
+    modality?: Modality;
+    window: OpenFeedWindow;
+    now?: Date;
+    actorToken?: string;
+  }): MaybePromise<MatchView[]>;
   getMatch(publicId: string, token?: string): MaybePromise<MatchView>;
   followMatchWatch(publicId: string, token: string): MaybePromise<MatchView>;
   unfollowMatchWatch(publicId: string, token: string): MaybePromise<MatchView>;

@@ -395,9 +395,16 @@ describe("PadelService integration", () => {
       "Open Inicio Manana",
       "Open Masc Manana",
     ]);
+    expect(next7.every((match) => match.canJoin === false)).toBe(true);
 
     const onlyMasc = service.listOpenFeed({ window: "next7", modality: "masc", now });
     expect(onlyMasc.map((match) => match.club)).toEqual(["Open Masc Manana"]);
+
+    const next7ForPlayer = service.listOpenFeed({ window: "next7", now, actorToken: p2 });
+    const openFromNowForPlayer = next7ForPlayer.find((match) => match.club === "Open Desde Ahora");
+    expect(openFromNowForPlayer?.canJoin).toBe(true);
+    expect(openFromNowForPlayer?.canLeave).toBe(false);
+    expect(openFromNowForPlayer?.isOrganizer).toBe(false);
   });
 
   it("derives no_se_armo in getMatch when match expired with less than 4 players", async () => {

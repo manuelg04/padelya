@@ -506,8 +506,9 @@ export class PadelService implements BackendPadelService {
       .map((match) => this.toMatchView(match, actor.id));
   }
 
-  listOpenFeed(filters: { modality?: Modality; window: OpenFeedWindow; now?: Date }): MatchView[] {
+  listOpenFeed(filters: { modality?: Modality; window: OpenFeedWindow; now?: Date; actorToken?: string }): MatchView[] {
     const now = filters.now ?? new Date();
+    const actorId = filters.actorToken ? this.resolveActorId(filters.actorToken) : null;
     const { fromInclusiveUtc, toInclusiveUtc } = getOpenFeedUtcRange(filters.window, now);
 
     return [...this.matches.values()]
@@ -528,7 +529,7 @@ export class PadelService implements BackendPadelService {
         return participantsCount < MAX_PLAYERS;
       })
       .sort((a, b) => a.startsAtUtc.localeCompare(b.startsAtUtc))
-      .map((match) => this.toMatchView(match, null));
+      .map((match) => this.toMatchView(match, actorId));
   }
 
   getMatch(publicId: string, token?: string): MatchView {

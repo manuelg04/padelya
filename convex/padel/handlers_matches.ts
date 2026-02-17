@@ -139,6 +139,9 @@ export async function listMineHandler(ctx: QueryCtx): Promise<MatchView[]> {
 }
 
 export async function listOpenFeedHandler(ctx: QueryCtx, args: ListOpenFeedArgs): Promise<MatchView[]> {
+  const actorUser = await getOptionalUser(ctx);
+  const actorUserId = actorUser?._id ?? null;
+
   const now = args.nowIso ? new Date(args.nowIso) : new Date();
   const { fromInclusiveUtc, toInclusiveUtc } = getOpenFeedUtcRange(args.window, now);
 
@@ -170,7 +173,7 @@ export async function listOpenFeedHandler(ctx: QueryCtx, args: ListOpenFeedArgs)
 
   openMatches.sort((a, b) => a.startsAtUtc.localeCompare(b.startsAtUtc));
 
-  return Promise.all(openMatches.map((match) => buildMatchView(ctx, match, null)));
+  return Promise.all(openMatches.map((match) => buildMatchView(ctx, match, actorUserId)));
 }
 
 export async function getMatchHandler(ctx: QueryCtx, args: GetMatchArgs): Promise<MatchView> {

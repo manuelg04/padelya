@@ -294,9 +294,10 @@ export class ConvexPadelService implements BackendPadelService {
     modality?: Modality;
     window: OpenFeedWindow;
     now?: Date;
+    actorToken?: string;
   }): Promise<MatchView[]> {
     try {
-      return await this.client.query(api.padel.listOpenFeed, {
+      return await this.getClientForToken(filters.actorToken).query(api.padel.listOpenFeed, {
         modality: filters.modality,
         window: filters.window,
         nowIso: filters.now?.toISOString(),
